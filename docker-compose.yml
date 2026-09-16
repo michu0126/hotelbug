@@ -1,0 +1,13 @@
+services:
+  ratedrop:
+    build: .
+    image: michu0126/hotelbug:local
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      HOTEL_RATE_API_URL: ${HOTEL_RATE_API_URL:-}
+      HOTEL_RATE_API_KEY: ${HOTEL_RATE_API_KEY:-}

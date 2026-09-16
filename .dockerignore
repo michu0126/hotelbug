@@ -1,0 +1,13 @@
+.git
+.github
+.next
+.vinext
+.wrangler
+.sites-runtime
+dist
+node_modules
+npm-debug.log*
+*.tar.gz
+*.zip
+.env
+.env.local
