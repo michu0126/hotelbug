@@ -18,6 +18,8 @@ docker run -d --name ratedrop -p 3000:3000 \
 
 ## 官网价格抓取（无需付费 API）
 
+全球目录同步：`node scripts/sync-official-catalog.mjs`（容器内加 `docker exec hotelbug`）。从官网站点地图收集万豪和希尔顿酒店代码及官网链接，在 `data/official-catalog.json` 中保存来源和失败记录。IHG、凯悦目录入口也会检查；GHA 目录解析仍待实现。目录不自动加入房价扫描，未验证的酒店均标记 `rateStatus: unverified`。目录覆盖与未来365天价格覆盖是两个不同指标；当前尚未实现全球全量价格接入。
+
 镜像内置低频浏览器抓取器，默认示例包括 Conrad Maldives Rangali Island、Park Hyatt Sydney、New York Marriott Marquis 和 InterContinental New York Barclay。目标配置位于 `config/official-hotels.json`。支持 ISO 日期占位符 `{checkIn}` / `{checkOut}`、万豪常用的美式日期占位符 `{checkInUs}` / `{checkOutUs}`，以及 IHG 使用的日期和月份占位符 `{checkInDay}`、`{checkOutDay}`、`{checkInMonthYear}`、`{checkOutMonthYear}`。
 
 ```bash

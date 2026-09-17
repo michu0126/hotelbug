@@ -46,3 +46,6 @@ next-env.d.ts
 /outputs/
 /work/
 /data/rate-history.json
+/data/official-catalog.json
+/data/official-catalog.json.tmp
+
