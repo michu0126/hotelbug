@@ -70,10 +70,15 @@ function normalizeNumber(value) {
 function findPrices(text, expectedCurrency) {
   const patterns = [
     { currency: "USD", regex: /(?:US\$|USD|\$)\s*([\d,.]+)/gi },
+    { currency: "USD", regex: /([\d,.]+)\s*(?:USD|US\$)(?:\s*(?:per night|\/night))?/gi },
     { currency: "AUD", regex: /(?:A\$|AUD)\s*([\d,.]+)/gi },
+    { currency: "AUD", regex: /([\d,.]+)\s*(?:AUD|A\$)(?:\s*(?:per night|\/night))?/gi },
     { currency: "EUR", regex: /(?:EUR|€)\s*([\d,.]+)/gi },
+    { currency: "EUR", regex: /([\d,.]+)\s*(?:EUR|€)(?:\s*(?:per night|\/night))?/gi },
     { currency: "GBP", regex: /(?:GBP|£)\s*([\d,.]+)/gi },
+    { currency: "GBP", regex: /([\d,.]+)\s*(?:GBP|£)(?:\s*(?:per night|\/night))?/gi },
     { currency: "CNY", regex: /(?:CNY|RMB|¥|￥)\s*([\d,.]+)/gi },
+    { currency: "CNY", regex: /([\d,.]+)\s*(?:CNY|RMB|¥|￥)(?:\s*(?:per night|\/night|每晚))?/gi },
     { currency: expectedCurrency, regex: /([\d,.]+)\s*(?:per night|\/night|每晚)/gi },
   ];
   const matches = [];
@@ -98,8 +103,28 @@ async function dismissCookies(page) {
   }
 }
 
+function dateParts(iso) {
+  const [year, month, day] = iso.split("-");
+  return {
+    iso,
+    day,
+    monthYear: `${month}${year}`,
+    us: encodeURIComponent(`${month}/${day}/${year}`),
+  };
+}
+
 function formatUrl(template, checkIn, checkOut) {
-  return template.replaceAll("{checkIn}", checkIn).replaceAll("{checkOut}", checkOut);
+  const arrival = dateParts(checkIn);
+  const departure = dateParts(checkOut);
+  return template
+    .replaceAll("{checkIn}", arrival.iso)
+    .replaceAll("{checkOut}", departure.iso)
+    .replaceAll("{checkInUs}", arrival.us)
+    .replaceAll("{checkOutUs}", departure.us)
+    .replaceAll("{checkInDay}", arrival.day)
+    .replaceAll("{checkOutDay}", departure.day)
+    .replaceAll("{checkInMonthYear}", arrival.monthYear)
+    .replaceAll("{checkOutMonthYear}", departure.monthYear);
 }
 
 async function scrapeTarget(page, target, checkIn, checkOut) {
@@ -220,3 +245,4 @@ await writeFile(historyFile, `${JSON.stringify(history, null, 2)}\n`, "utf8");
 const summary = { scannedAt: new Date().toISOString(), scanDays, targets: targets.length, results, alerts };
 if (jsonOnly) process.stdout.write(JSON.stringify(summary));
 else console.log(JSON.stringify(summary, null, 2));
+

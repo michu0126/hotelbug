@@ -18,7 +18,7 @@ docker run -d --name ratedrop -p 3000:3000 \
 
 ## 官网价格抓取（无需付费 API）
 
-镜像内置低频浏览器抓取器，默认示例为 Conrad Maldives Rangali Island 和 Park Hyatt Sydney。目标配置位于 `config/official-hotels.json`，可用 `{checkIn}`、`{checkOut}` 作为日期占位符。
+镜像内置低频浏览器抓取器，默认示例包括 Conrad Maldives Rangali Island、Park Hyatt Sydney、New York Marriott Marquis 和 InterContinental New York Barclay。目标配置位于 `config/official-hotels.json`。支持 ISO 日期占位符 `{checkIn}` / `{checkOut}`、万豪常用的美式日期占位符 `{checkInUs}` / `{checkOutUs}`，以及 IHG 使用的日期和月份占位符 `{checkInDay}`、`{checkOutDay}`、`{checkInMonthYear}`、`{checkOutMonthYear}`。
 
 ```bash
 docker exec hotelbug npm run scrape:rates
@@ -32,6 +32,8 @@ docker exec hotelbug npm run scrape:rates
 - `SCRAPER_DATA_DIR=/app/data`：历史价格持久化目录；Compose 使用 `hotelbug-data` 数据卷。
 
 抓取器只读取无需登录即可看到的公开价格，不绕过验证码、访问限制或登录。官网页面结构变化时，目标可能暂时无法识别价格；请先在浏览器中核对最终税费、房型与取消政策。
+
+2026-09-17 实测：IHG 示例返回了现金房价；万豪已添加查询配置，但当前测试环境未能取得房价（日期表单或访问拒绝），仍待验证。四个示例不代表集团全球酒店已全部接入。页面显示的最低报价可能包含会员价，预订条件以官网为准。
 
 ## 自动发布镜像
 
@@ -163,3 +165,4 @@ The portable build runs Vinext directly without a host `timeout` command. The ma
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+

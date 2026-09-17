@@ -12,5 +12,20 @@
     "name": "Park Hyatt Sydney",
     "currency": "AUD",
     "urlTemplate": "https://www.hyatt.com/shop/rooms/sydph?checkinDate={checkIn}&checkoutDate={checkOut}&rooms=1&adults=2&kids=0"
+  },
+  {
+    "id": "marriott-new-york-marquis",
+    "group": "marriott",
+    "name": "New York Marriott Marquis",
+    "currency": "USD",
+    "urlTemplate": "https://www.marriott.com/en-us/reservation/availability.mi?propertyCode=NYCMQ&isSearch=false&fromDate={checkInUs}&toDate={checkOutUs}&roomCount=1&numAdultsPerRoom=2&childrenCount=0&useRequestCriteria=true&showErrors=true&useRewardsPoints=false"
+  },
+  {
+    "id": "ihg-intercontinental-new-york-barclay",
+    "group": "ihg",
+    "name": "InterContinental New York Barclay",
+    "currency": "USD",
+    "urlTemplate": "https://www.ihg.com/redirect?path=rates&brandCode=IC&localeCode=en&regionCode=1&hotelCode=NYCHA&checkInDate={checkInDay}&checkInMonthYear={checkInMonthYear}&checkOutDate={checkOutDay}&checkOutMonthYear={checkOutMonthYear}&numberOfRooms=1&numberOfAdults=2&numberOfChildren=0"
   }
 ]
+
