@@ -45,3 +45,4 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+/data/rate-history.json

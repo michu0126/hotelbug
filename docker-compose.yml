@@ -1,13 +1,24 @@
 services:
   ratedrop:
-    build: .
-    image: michu0126/hotelbug:local
+    image: michu0126/hotelbug:latest
+    container_name: hotelbug
     ports:
       - "3000:3000"
     restart: unless-stopped
+    shm_size: "1gb"
+    volumes:
+      - hotelbug-data:/app/data
     environment:
       PORT: "3000"
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       HOTEL_RATE_API_URL: ${HOTEL_RATE_API_URL:-}
       HOTEL_RATE_API_KEY: ${HOTEL_RATE_API_KEY:-}
+      SCRAPER_TARGETS_FILE: /app/config/official-hotels.json
+      SCRAPER_DATA_DIR: /app/data
+      SCAN_DAYS: ${SCAN_DAYS:-7}
+      SCRAPER_DELAY_MS: ${SCRAPER_DELAY_MS:-5000}
+      DROP_THRESHOLD: ${DROP_THRESHOLD:-35}
+
+volumes:
+  hotelbug-data:

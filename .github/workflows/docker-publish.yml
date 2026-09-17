@@ -70,4 +70,3 @@ jobs:
           labels: ${{ steps.dockerhub-meta.outputs.labels }}
           platforms: linux/amd64
           cache-from: type=gha
-

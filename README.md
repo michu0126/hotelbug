@@ -16,6 +16,23 @@ docker run -d --name ratedrop -p 3000:3000 \
 
 打开 `http://服务器IP:3000`，健康检查地址为 `/api/health`。
 
+## 官网价格抓取（无需付费 API）
+
+镜像内置低频浏览器抓取器，默认示例为 Conrad Maldives Rangali Island 和 Park Hyatt Sydney。目标配置位于 `config/official-hotels.json`，可用 `{checkIn}`、`{checkOut}` 作为日期占位符。
+
+```bash
+docker exec hotelbug npm run scrape:rates
+```
+
+常用环境变量：
+
+- `SCAN_DAYS=7`：从明天开始扫描的天数，允许 1–365；不建议一次直接扫满一年。
+- `SCRAPER_DELAY_MS=5000`：两次页面访问之间的等待时间，最少强制 1500 毫秒。
+- `DROP_THRESHOLD=35`：相对上一次同酒店同入住日价格的 Telegram 推送阈值。
+- `SCRAPER_DATA_DIR=/app/data`：历史价格持久化目录；Compose 使用 `hotelbug-data` 数据卷。
+
+抓取器只读取无需登录即可看到的公开价格，不绕过验证码、访问限制或登录。官网页面结构变化时，目标可能暂时无法识别价格；请先在浏览器中核对最终税费、房型与取消政策。
+
 ## 自动发布镜像
 
 仓库推送到 `main` 后，GitHub Actions 会自动构建 `linux/amd64` 和 `linux/arm64` 镜像并发布到 GHCR。若仓库中配置 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`，同一流程也会发布到 Docker Hub。

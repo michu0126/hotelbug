@@ -1,0 +1,16 @@
+[
+  {
+    "id": "hilton-conrad-maldives",
+    "group": "hilton",
+    "name": "Conrad Maldives Rangali Island",
+    "currency": "USD",
+    "urlTemplate": "https://www.hilton.com/en/book/reservation/rooms/?ctyhocn=MLEHICI&arrivalDate={checkIn}&departureDate={checkOut}&room1NumAdults=2&room1NumChildren=0"
+  },
+  {
+    "id": "hyatt-park-sydney",
+    "group": "hyatt",
+    "name": "Park Hyatt Sydney",
+    "currency": "AUD",
+    "urlTemplate": "https://www.hyatt.com/shop/rooms/sydph?checkinDate={checkIn}&checkoutDate={checkOut}&rooms=1&adults=2&kids=0"
+  }
+]
