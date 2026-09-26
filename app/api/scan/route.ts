@@ -20,8 +20,8 @@ export async function POST() {
     if (Date.now() - lastScanStartedAt < 5 * 60 * 1000) {
       return Response.json({ configured: true, mode: "official-scraper", accepted: false, error: "为保护官网，请至少间隔 5 分钟再次扫描" }, { status: 429 });
     }
-    const script = path.join(process.cwd(), "scripts", "scrape-official-rates.mjs");
-    activeScan = spawn(process.execPath, [script], {
+    const script = path.join(process.cwd(), "scripts", "monitor.mjs");
+    activeScan = spawn(process.execPath, [script, "--once"], {
       cwd: process.cwd(),
       env: process.env,
       stdio: "inherit",
@@ -52,3 +52,4 @@ export async function POST() {
   const result = await response.json();
   return Response.json({ configured: true, result });
 }
+

@@ -1,134 +1,51 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Activity, BellRing, Bot, CalendarDays, Check, ChevronsUpDown, CircleAlert, CloudCog, Globe2, Hotel, LayoutDashboard, Menu, Radar, RefreshCw, Search, Send, Settings2, ShieldCheck, SlidersHorizontal, TrendingDown, X } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Toaster } from "@/components/ui/sonner";
+import { useEffect, useState } from "react";
+import { Radar, RefreshCw, Globe2, CalendarDays, Activity, BellRing, ExternalLink, Search } from "lucide-react";
 
-type Deal = { id: number; group: string; brand: string; groupTone: string; hotel: string; city: string; country: string; checkIn: string; nights: number; oldPrice: number; price: number; drop: number; detected: string; confidence: "高" | "中"; history: number[] };
-
-const deals: Deal[] = [
-  { id: 1, group: "M", brand: "万豪", groupTone: "bg-[#6d1f2f]", hotel: "大阪万豪都酒店", city: "大阪", country: "日本", checkIn: "2026-11-18", nights: 2, oldPrice: 2680, price: 692, drop: 74, detected: "2 分钟前", confidence: "高", history: [2620, 2710, 2580, 2670, 2510, 692] },
-  { id: 2, group: "H", brand: "希尔顿", groupTone: "bg-[#153f83]", hotel: "Conrad Maldives Rangali Island", city: "南阿里环礁", country: "马尔代夫", checkIn: "2027-05-12", nights: 3, oldPrice: 7430, price: 2389, drop: 68, detected: "6 分钟前", confidence: "高", history: [7210, 7590, 7480, 7110, 7390, 2389] },
-  { id: 3, group: "IHG", brand: "IHG", groupTone: "bg-[#111827]", hotel: "InterContinental Paris Le Grand", city: "巴黎", country: "法国", checkIn: "2027-02-03", nights: 1, oldPrice: 3960, price: 1548, drop: 61, detected: "11 分钟前", confidence: "高", history: [3880, 4020, 3910, 4070, 3820, 1548] },
-  { id: 4, group: "H", brand: "凯悦", groupTone: "bg-[#4e2b77]", hotel: "Park Hyatt Sydney", city: "悉尼", country: "澳大利亚", checkIn: "2027-03-21", nights: 2, oldPrice: 6180, price: 2781, drop: 55, detected: "18 分钟前", confidence: "中", history: [6040, 6250, 6010, 6180, 5870, 2781] },
-  { id: 5, group: "GHA", brand: "GHA", groupTone: "bg-[#796120]", hotel: "Capella Bangkok", city: "曼谷", country: "泰国", checkIn: "2026-12-07", nights: 2, oldPrice: 4310, price: 2155, drop: 50, detected: "24 分钟前", confidence: "高", history: [4250, 4390, 4180, 4470, 4310, 2155] },
-  { id: 6, group: "M", brand: "万豪", groupTone: "bg-[#6d1f2f]", hotel: "The St. Regis Rome", city: "罗马", country: "意大利", checkIn: "2027-01-15", nights: 1, oldPrice: 5220, price: 2871, drop: 45, detected: "31 分钟前", confidence: "中", history: [5100, 5360, 5180, 5270, 5010, 2871] },
-];
-
-const groups = ["全部", "万豪", "IHG", "希尔顿", "凯悦", "GHA"];
-
-function Sparkline({ values }: { values: number[] }) {
-  const max = Math.max(...values), min = Math.min(...values);
-  const points = values.map((value, index) => `${(index / (values.length - 1)) * 76 + 2},${28 - ((value - min) / Math.max(max - min, 1)) * 22 + 2}`).join(" ");
-  const last = points.split(" ").at(-1)?.split(",")[1] ?? "28";
-  return <svg viewBox="0 0 80 34" className="h-9 w-20" role="img" aria-label="近期价格走势"><path d="M2 30H78" stroke="currentColor" className="text-slate-200" strokeWidth="1" /><polyline points={points} fill="none" stroke="currentColor" className="text-rose-500" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" /><circle cx="78" cy={last} r="3" className="fill-rose-500" /></svg>;
-}
-
-function BrandMark() {
-  return <div className="flex items-center gap-3"><div className="relative grid size-10 shrink-0 place-items-center rounded-[13px] bg-[#081728] text-white shadow-[0_8px_22px_rgba(8,23,40,.18)]"><Radar className="size-5" /><span className="absolute right-[9px] top-[9px] size-1.5 rounded-full bg-[#e84a5f] ring-2 ring-[#081728]" /></div><div><div className="text-[17px] font-extrabold tracking-[-.04em] text-slate-950">RateDrop</div><div className="text-[11px] font-medium tracking-[.13em] text-slate-400">HOTEL RADAR</div></div></div>;
-}
-
-export default function Home() {
-  const [activeGroup, setActiveGroup] = useState("全部");
-  const [query, setQuery] = useState("");
-  const [threshold, setThreshold] = useState([35]);
-  const [selected, setSelected] = useState<Deal>(deals[0]);
-  const [scanning, setScanning] = useState(false);
-  const [telegramOn, setTelegramOn] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [lastScan, setLastScan] = useState("16:58");
-  const [telegramConfigured, setTelegramConfigured] = useState(false);
-  const [rateSourceConfigured, setRateSourceConfigured] = useState(false);
-
-  const filtered = useMemo(() => deals.filter((deal) => (activeGroup === "全部" || deal.brand === activeGroup) && `${deal.hotel}${deal.city}${deal.country}`.toLowerCase().includes(query.toLowerCase()) && deal.drop >= threshold[0]), [activeGroup, query, threshold]);
-
-  useEffect(() => {
-    const context = typeof document === "undefined" ? undefined : (document as Document & { modelContext?: { registerTool?: (tool: unknown, options?: { signal?: AbortSignal }) => void | Promise<void> } }).modelContext;
-    if (!context?.registerTool) return;
-    const lifecycle = new AbortController();
-    void Promise.resolve(context.registerTool({ name: "configure_hotel_price_alerts", title: "配置酒店降价提醒", description: "设置页面中的最低降价百分比和 Telegram 通知开关。", inputSchema: { type: "object", properties: { threshold: { type: "number", minimum: 20, maximum: 80 }, telegramEnabled: { type: "boolean" } }, required: ["threshold"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute(input: unknown) { const value = input as { threshold?: number; telegramEnabled?: boolean }; if (typeof value.threshold !== "number" || value.threshold < 20 || value.threshold > 80) throw new Error("threshold 必须在 20–80 之间"); setThreshold([Math.round(value.threshold)]); if (typeof value.telegramEnabled === "boolean") setTelegramOn(value.telegramEnabled); return { threshold: Math.round(value.threshold), telegramEnabled: typeof value.telegramEnabled === "boolean" ? value.telegramEnabled : telegramOn }; } }, { signal: lifecycle.signal })).catch(() => {});
-    return () => lifecycle.abort();
-  }, [telegramOn]);
-
-  useEffect(() => {
-    fetch("/api/system/status", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((raw) => {
-        const status = raw as { telegramConfigured?: boolean; rateSourceConfigured?: boolean };
-        setTelegramConfigured(Boolean(status.telegramConfigured));
-        setRateSourceConfigured(Boolean(status.rateSourceConfigured));
-      })
-      .catch(() => {});
-  }, []);
-
-  async function runScan() {
-    if (scanning) return;
-    setScanning(true); toast.loading("正在扫描未来 365 天价格…", { id: "scan" });
-    try {
-      const response = await fetch("/api/scan", { method: "POST" });
-      const result = await response.json() as { configured?: boolean; error?: string };
-      await new Promise((resolve) => window.setTimeout(resolve, 900));
-      setLastScan(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }));
-      if (!response.ok) toast.warning(result.error ?? "扫描未完成", { id: "scan", description: "当前继续展示接入前演示数据。" });
-      else toast.success("实时扫描任务已提交", { id: "scan" });
-    } catch {
-      toast.error("扫描服务暂时不可用", { id: "scan" });
-    } finally { setScanning(false); }
-  }
-
-  async function sendTelegramTest() {
-    const response = await fetch("/api/telegram/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hotel: selected.hotel, checkIn: selected.checkIn, nights: selected.nights, price: selected.price, drop: selected.drop }) });
-    const result = await response.json() as { error?: string };
-    if (!response.ok) toast.warning(result.error ?? "测试发送失败", { description: "发布后配置 Bot Token 与 Chat ID 即可启用。" });
-    else toast.success("测试消息已发送到 Telegram");
-  }
-
-  return <div className="min-h-screen bg-[#f3f6f8] text-slate-900">
-    <Toaster position="top-center" richColors />
-    <div className="mx-auto flex min-h-screen max-w-[1720px]">
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[236px] flex-col border-r border-slate-200/80 bg-white px-4 py-5 transition-transform lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="flex items-center justify-between px-2 pb-7"><BrandMark /><Button aria-label="关闭导航" variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setSidebarOpen(false)}><X /></Button></div>
-        <nav aria-label="主导航" className="space-y-1"><button className="nav-item nav-item-active"><LayoutDashboard />监控总览</button><button className="nav-item"><TrendingDown />降价发现<span className="ml-auto rounded-full bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-600">6</span></button><button className="nav-item"><Hotel />酒店库</button><button className="nav-item"><BellRing />推送记录</button></nav>
-        <div className="my-5 h-px bg-slate-100" /><p className="px-3 pb-2 text-xs font-bold uppercase tracking-[.12em] text-slate-400">系统</p>
-        <nav className="space-y-1"><button className="nav-item"><CloudCog />数据源</button><button className="nav-item"><Settings2 />监控设置</button></nav>
-        <div className="mt-auto rounded-2xl border border-slate-200 bg-[#f7f9fb] p-4"><div className="mb-3 flex items-center gap-2 text-sm font-bold"><Bot className="size-4 text-[#1495d4]" />Telegram 推送</div><div className="mb-3 flex items-center justify-between text-sm"><span className="flex items-center gap-2 text-slate-500"><span className={`size-2 rounded-full ${telegramConfigured && telegramOn ? "bg-emerald-500" : "bg-amber-400"}`} />{telegramConfigured ? (telegramOn ? "已启用" : "已暂停") : "待配置"}</span><Switch checked={telegramOn} onCheckedChange={setTelegramOn} aria-label="切换 Telegram 推送" /></div><p className="text-xs leading-5 text-slate-400">命中阈值后，将酒店、入住日期与价格发送到机器人。</p></div>
-      </aside>
-      {sidebarOpen && <button aria-label="关闭导航遮罩" className="fixed inset-0 z-30 bg-slate-950/25 lg:hidden" onClick={() => setSidebarOpen(false)} />}
-
-      <main className="min-w-0 flex-1 px-4 pb-8 sm:px-6 xl:px-8">
-        <header className="sticky top-0 z-20 -mx-4 mb-5 flex h-[76px] items-center justify-between border-b border-slate-200/80 bg-[#f3f6f8]/90 px-4 backdrop-blur-lg sm:-mx-6 sm:px-6 xl:-mx-8 xl:px-8"><div className="flex items-center gap-3"><Button aria-label="打开导航" variant="outline" size="icon" className="bg-white lg:hidden" onClick={() => setSidebarOpen(true)}><Menu /></Button><div><h1 className="text-xl font-extrabold tracking-[-.035em] sm:text-2xl">全球酒店价格雷达</h1><p className="mt-0.5 hidden text-sm text-slate-500 sm:block">未来 365 天 · 全球范围 · 标准可取消价</p></div></div><div className="flex items-center gap-2"><div className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-500 md:flex"><span className={`size-2 rounded-full ${rateSourceConfigured ? "animate-pulse bg-emerald-500" : "bg-amber-400"}`} />{rateSourceConfigured ? "实时监控中" : "演示模式"}</div><Button onClick={runScan} disabled={scanning} className="h-10 rounded-xl bg-[#081728] px-4 hover:bg-[#132d47]"><RefreshCw className={scanning ? "animate-spin" : ""} />{scanning ? "扫描中" : "立即扫描"}</Button></div></header>
-
-        <section aria-label="监控概览" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {[
-            { icon: Globe2, label: "覆盖酒店", value: "18,642", note: "全球 191 个国家/地区", accent: "text-[#3157a4] bg-blue-50" },
-            { icon: CalendarDays, label: "监控日期", value: "365 天", note: "2026.09.15 — 2027.09.14", accent: "text-violet-600 bg-violet-50" },
-            { icon: Activity, label: "今日价格检查", value: "2.84M", note: "上次完成 16:58", accent: "text-emerald-600 bg-emerald-50" },
-            { icon: CircleAlert, label: "异常降价", value: "6", note: "24 小时内 · 待核验", accent: "text-rose-600 bg-rose-50" },
-          ].map((item) => <div key={item.label} className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,.02)]"><div className="mb-4 flex items-center justify-between"><span className={`grid size-9 place-items-center rounded-xl ${item.accent}`}><item.icon className="size-[18px]" /></span><ChevronsUpDown className="size-4 text-slate-300" /></div><div className="text-2xl font-black tracking-[-.04em] text-slate-950">{item.value}</div><div className="mt-1 text-sm font-semibold text-slate-600">{item.label}</div><div className="mt-2 text-xs text-slate-400">{item.note}</div></div>)}
-        </section>
-
-        <section className="mt-5 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,.02)]">
-          <div className="flex flex-col gap-4 border-b border-slate-100 p-5 xl:flex-row xl:items-center xl:justify-between"><div><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-rose-50 text-rose-600"><TrendingDown className="size-4" /></span><h2 className="text-lg font-extrabold tracking-[-.025em]">实时异常降价</h2><span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-600">{filtered.length}</span></div><p className="mt-1 pl-10 text-sm text-slate-400">按历史中位价、同星期与同房型交叉判断</p></div><div className="flex flex-col gap-2 sm:flex-row"><div className="relative min-w-[220px]"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索酒店或城市" className="h-10 rounded-xl bg-slate-50 pl-9 shadow-none" /></div><Select defaultValue="drop"><SelectTrigger className="h-10 w-full rounded-xl bg-white sm:w-[156px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="drop">降幅从高到低</SelectItem><SelectItem value="new">最新发现</SelectItem><SelectItem value="price">价格从低到高</SelectItem></SelectContent></Select></div></div>
-          <div className="flex gap-2 overflow-x-auto border-b border-slate-100 px-5 py-3 scrollbar-none">{groups.map((group) => <button key={group} onClick={() => setActiveGroup(group)} className={`shrink-0 rounded-lg px-3.5 py-2 text-sm font-semibold transition ${activeGroup === group ? "bg-[#081728] text-white" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}>{group}</button>)}</div>
-          <div className="hidden lg:block"><Table><TableHeader><TableRow className="hover:bg-transparent"><TableHead className="pl-5 text-xs text-slate-400">酒店</TableHead><TableHead className="text-xs text-slate-400">入住</TableHead><TableHead className="text-xs text-slate-400">原价 / 当前价</TableHead><TableHead className="text-xs text-slate-400">降幅</TableHead><TableHead className="text-xs text-slate-400">走势</TableHead><TableHead className="text-xs text-slate-400">发现时间</TableHead><TableHead className="pr-5 text-right text-xs text-slate-400">操作</TableHead></TableRow></TableHeader><TableBody>{filtered.map((deal) => <TableRow key={deal.id} className={`cursor-pointer ${selected.id === deal.id ? "bg-slate-50/80" : ""}`} onClick={() => setSelected(deal)}><TableCell className="py-4 pl-5"><div className="flex items-center gap-3"><span className={`grid size-9 place-items-center rounded-lg text-[11px] font-black text-white ${deal.groupTone}`}>{deal.group}</span><div><div className="max-w-[260px] truncate font-bold text-slate-900">{deal.hotel}</div><div className="mt-1 text-xs text-slate-400">{deal.city} · {deal.country}</div></div></div></TableCell><TableCell><div className="font-semibold">{deal.checkIn.slice(5).replace("-", ".")}</div><div className="mt-1 text-xs text-slate-400">{deal.nights} 晚</div></TableCell><TableCell><div className="text-xs text-slate-400 line-through">¥{deal.oldPrice.toLocaleString()}</div><div className="mt-1 text-base font-black text-slate-950">¥{deal.price.toLocaleString()}</div></TableCell><TableCell><span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-1 text-sm font-black text-rose-600"><TrendingDown className="size-3.5" />{deal.drop}%</span></TableCell><TableCell><Sparkline values={deal.history} /></TableCell><TableCell><div className="text-sm text-slate-600">{deal.detected}</div><div className="mt-1 flex items-center gap-1 text-xs text-emerald-600"><ShieldCheck className="size-3" />置信度{deal.confidence}</div></TableCell><TableCell className="pr-5 text-right"><Button variant="outline" size="sm" className="rounded-lg" onClick={(event) => { event.stopPropagation(); toast.success(`已重新推送 ${deal.hotel}`); }}><Send />推送</Button></TableCell></TableRow>)}</TableBody></Table></div>
-          <div className="divide-y divide-slate-100 lg:hidden">{filtered.map((deal) => <button key={deal.id} onClick={() => setSelected(deal)} className="w-full p-4 text-left hover:bg-slate-50"><div className="flex items-start gap-3"><span className={`grid size-9 shrink-0 place-items-center rounded-lg text-[11px] font-black text-white ${deal.groupTone}`}>{deal.group}</span><div className="min-w-0 flex-1"><div className="truncate font-bold">{deal.hotel}</div><div className="mt-1 text-xs text-slate-400">{deal.city} · {deal.checkIn}</div></div><span className="rounded-md bg-rose-50 px-2 py-1 text-sm font-black text-rose-600">-{deal.drop}%</span></div><div className="mt-3 flex items-end justify-between pl-12"><div><span className="text-xs text-slate-400 line-through">¥{deal.oldPrice.toLocaleString()}</span><span className="ml-2 text-lg font-black">¥{deal.price.toLocaleString()}</span></div><span className="text-xs text-slate-400">{deal.detected}</span></div></button>)}</div>
-          {filtered.length === 0 && <div className="grid place-items-center px-6 py-16 text-center"><Search className="mb-3 size-8 text-slate-300" /><p className="font-bold">没有匹配的异常价格</p><p className="mt-1 text-sm text-slate-400">降低阈值或更换酒店集团后再查看。</p></div>}
-        </section>
-
-        <section className="mt-5 grid gap-5 xl:grid-cols-[1.55fr_1fr]">
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5"><div className="mb-5 flex items-start justify-between"><div><h2 className="font-extrabold">监控强度</h2><p className="mt-1 text-sm text-slate-400">降幅达到阈值时进入核验并触发推送</p></div><SlidersHorizontal className="size-5 text-slate-400" /></div><div className="rounded-xl bg-[#f6f8fa] p-4"><div className="mb-4 flex items-center justify-between"><span className="text-sm font-semibold text-slate-600">最低降价幅度</span><span className="rounded-lg bg-white px-3 py-1.5 text-lg font-black text-rose-600 shadow-sm">{threshold[0]}%</span></div><Slider min={20} max={80} step={5} value={threshold} onValueChange={setThreshold} aria-label="最低降价幅度" className="[&_[data-slot=slider-range]]:bg-rose-500 [&_[data-slot=slider-thumb]]:border-rose-500" /><div className="mt-3 flex justify-between text-xs text-slate-400"><span>20% 灵敏</span><span>80% 严格</span></div></div><div className="mt-4 flex flex-wrap gap-x-6 gap-y-3 text-sm text-slate-500"><span className="flex items-center gap-2"><Check className="size-4 text-emerald-500" />同房型比价</span><span className="flex items-center gap-2"><Check className="size-4 text-emerald-500" />税费标准化</span><span className="flex items-center gap-2"><Check className="size-4 text-emerald-500" />多币种换算</span><span className="flex items-center gap-2"><Check className="size-4 text-emerald-500" />二次可订验证</span></div></div>
-          <div className="rounded-2xl bg-[#081728] p-5 text-white shadow-[0_18px_45px_rgba(8,23,40,.15)]"><div className="flex items-start justify-between"><div><div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[.13em] text-sky-300"><Bot className="size-4" />Telegram</div><h2 className="text-lg font-extrabold">{telegramConfigured ? "推送通道已就绪" : "等待机器人凭据"}</h2><p className="mt-2 text-sm leading-6 text-slate-300">通知包含酒店全名、入住日期、含税价格、降幅和核验提示。</p></div><span className={`size-2.5 rounded-full ring-4 ${telegramConfigured ? "bg-emerald-400 ring-emerald-400/15" : "bg-amber-400 ring-amber-400/15"}`} /></div><div className="mt-5 flex items-center justify-between rounded-xl bg-white/[.07] p-3"><div><div className="text-sm font-bold">{telegramConfigured ? "机器人已连接" : "Bot Token + Chat ID"}</div><div className="mt-1 text-xs text-slate-400">{telegramConfigured ? "可发送实时异常提醒" : "需在发布环境中配置"}</div></div><Dialog><DialogTrigger asChild><Button variant="outline" size="sm" className="border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white">测试推送</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>发送测试消息</DialogTitle><DialogDescription>将使用已配置的机器人向目标会话发送一条模拟降价提醒。</DialogDescription></DialogHeader><div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6"><strong>{selected.hotel}</strong><br />{selected.checkIn} · {selected.nights} 晚<br /><span className="font-bold text-rose-600">¥{selected.price.toLocaleString()}（-{selected.drop}%）</span></div><DialogFooter><Button onClick={sendTelegramTest}><Send />发送测试</Button></DialogFooter></DialogContent></Dialog></div></div>
-        </section>
-        <footer className="mt-5 flex flex-col gap-2 px-1 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between"><span>数据更新时间：今天 {lastScan} · 页面展示为接入前演示数据</span><span className="flex items-center gap-1.5"><ShieldCheck className="size-3.5" />仅使用官方或授权价格源</span></footer>
-      </main>
+const names: Record<string,string>={marriott:"万豪",ihg:"IHG",hilton:"希尔顿",hyatt:"凯悦",gha:"GHA"};
+type Quote={hotel:string;checkIn:string;price:number;currency:string;checkedAt:string;url:string;drop?:number;telegramSent?:boolean};
+type Source={group:string;status:string;hotels:number;pendingPages:number;failures:{url:string;error:string}[]};
+type Status={telegramConfigured:boolean;monitoringWindowDays:number;threshold:number;catalog:{count:number;updatedAt:string;sources:Source[]}|null;monitor:{updatedAt:string;workerRunning:boolean;groups:{name:string;hotels:number;checks:number;successfulHotels:number;failedHotels:number;unsupportedHotels:number}[];freshHotelDates:number;latest:Quote[];alerts:Quote[];errors:{id:string;error:string}[];cooldowns:{group_name:string;until_at:number;reason:string}[]}|null};
+type Hotel={id:string;group:string;name?:string;nameFromUrl?:string;officialUrl:string;rateStatus:string};
+const time=(value:string)=>new Date(value).toLocaleString("zh-CN");
+export default function Home(){
+  const [status,setStatus]=useState<Status|null>(null),[error,setError]=useState(""),[busy,setBusy]=useState(false),[message,setMessage]=useState("");
+  const [query,setQuery]=useState(""),[group,setGroup]=useState(""),[page,setPage]=useState(0),[hotels,setHotels]=useState<Hotel[]>([]),[total,setTotal]=useState(0);
+  useEffect(()=>{
+    const controller=new AbortController();
+    async function refresh(){try{const r=await fetch("/api/system/status",{cache:"no-store",signal:controller.signal});if(!r.ok)throw new Error("读取监控状态失败");setStatus(await r.json());setError("");}catch(e){if(!controller.signal.aborted)setError((e as Error).message);}}
+    void refresh();const timer=setInterval(refresh,15000);return()=>{controller.abort();clearInterval(timer);};
+  },[]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>{void fetch("/api/hotels?"+new URLSearchParams({q:query,group,page:String(page)}),{signal:controller.signal}).then(r=>{if(!r.ok)throw new Error("读取酒店库失败");return r.json() as Promise<{hotels:Hotel[];total:number}>;}).then(r=>{setHotels(r.hotels);setTotal(r.total);}).catch(e=>{if(!controller.signal.aborted)setError(e.message);});},250);
+    return()=>{clearTimeout(timer);controller.abort();};
+  },[query,group,page,status?.catalog?.updatedAt]);
+  async function scan(){setBusy(true);try{const r=await fetch("/api/scan",{method:"POST"});const o=await r.json() as {error?:string};setMessage(r.ok?"已提交目录同步和房价查询批次，结果会自动刷新。":o.error||"提交失败");}catch{setMessage("无法连接扫描服务");}finally{setBusy(false);}}
+  const monitor=status?.monitor;
+  const checks=monitor?.groups.reduce((n,g)=>n+g.checks,0)||0;
+  const verified=monitor?.groups.reduce((n,g)=>n+g.successfulHotels,0)||0;
+  const running=!!monitor?.workerRunning;
+  return <main className="min-h-screen bg-slate-50 text-slate-900">
+    <header className="bg-slate-950 text-white"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-7"><div className="flex items-center gap-3"><Radar className="size-10 text-rose-400"/><div><h1 className="text-2xl font-bold">RateDrop 全球酒店雷达</h1><p className="mt-1 text-sm text-slate-400">集团官网目录 · 滚动日期查询 · Telegram 降价线索</p></div></div><button onClick={scan} disabled={busy} className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 font-semibold text-slate-950 disabled:opacity-50"><RefreshCw className={busy?"size-4 animate-spin":"size-4"}/>{busy?"提交中":"同步并查询一批"}</button></div></header>
+    <div className="mx-auto max-w-7xl space-y-6 px-6 py-7">
+      {(error||message)&&<p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">{error||message}</p>}
+      <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-950">酒店目录持续同步中，收录数量不等于房价覆盖数量。只有页面确认日期、币种和每晚价格后才会记入报价。GHA 当前支持酒店资料采集，预订价格适配仍待完成。</div>
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[{icon:Globe2,label:"官网酒店名录",value:status?.catalog?.count||0,note:"尚未验证集团全量覆盖"},{icon:CalendarDays,label:"滚动目标日期",value:(status?.monitoringWindowDays||365)+" 天",note:"按批次推进，非一年价格已查完"},{icon:Activity,label:"实际查询次数",value:checks,note:"最近查询成功酒店："+verified},{icon:BellRing,label:"近24小时有效酒店日期",value:monitor?.freshHotelDates||0,note:"每家酒店 × 每个入住日期"}].map(c=><article key={c.label} className="rounded-2xl border border-slate-200 bg-white p-5"><c.icon className="mb-4 size-5 text-slate-500"/><p className="text-3xl font-bold">{typeof c.value==="number"?c.value.toLocaleString():c.value}</p><h2 className="mt-2 font-medium">{c.label}</h2><p className="mt-2 text-xs text-slate-500">{c.note}</p></article>)}
+      </section>
+      <section className="rounded-2xl border bg-white p-5"><h2 className="mb-4 text-lg font-bold">集团官网接入进度</h2><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-500"><tr><th className="py-3">集团</th><th>已收录</th><th>待处理目录</th><th>房价状态</th><th>目录状态 / 最近错误</th></tr></thead><tbody>{Object.entries(names).map(([id,name])=>{const source=status?.catalog?.sources.find(s=>s.group===id),g=monitor?.groups.find(s=>s.name===id),pause=monitor?.cooldowns.find(s=>s.group_name===id);return <tr key={id} className="border-t"><td className="py-4 font-semibold">{name}</td><td>{source?.hotels||0}</td><td>{source?.pendingPages??"—"}</td><td>{id==="gha"?"待适配预订价格":pause?"暂停至 "+time(new Date(pause.until_at).toISOString()):g?.successfulHotels?g.successfulHotels+" 家最近成功":"尚无成功报价"}</td><td className="max-w-xs break-words">{source?.failures?.at(-1)?.error||(source?.status==="directory_only"?"当前目录遍历完成，完整性待核验":source?"同步中":"等待同步")}</td></tr>;})}</tbody></table></div></section>
+      <section className="rounded-2xl border bg-white p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-bold">最近官网报价</h2><span className="text-sm text-slate-500">{running?"查询批次运行中":"等待下一批查询"} · Telegram {status?.telegramConfigured?"已配置":"未配置"}</span></div><p className="mb-4 text-xs text-slate-500">1间 · 2成人 · 1晚。保留原币种，税费、会员条件、房型和取消政策未统一。</p><Quotes rows={monitor?.latest||[]}/></section>
+      <section className="rounded-2xl border bg-white p-5"><h2 className="mb-2 text-lg font-bold">降价线索与推送</h2><p className="mb-4 text-sm text-slate-500">与同酒店、同入住日、同币种的上次最低可见每晚价比较，阈值 {status?.threshold||35}%。不同房型或规则可能造成价格变化。</p><Quotes rows={monitor?.alerts||[]} alerts/></section>
+      <section className="rounded-2xl border bg-white p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-bold">官网酒店库 <span className="text-sm font-normal text-slate-500">{total.toLocaleString()} 条</span></h2><div className="flex flex-wrap gap-2"><select aria-label="酒店集团" value={group} onChange={e=>{setGroup(e.target.value);setPage(0);}} className="rounded-lg border p-2"><option value="">全部集团</option>{Object.entries(names).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select><label className="flex items-center gap-2 rounded-lg border px-3"><Search className="size-4"/><input aria-label="搜索酒店" placeholder="酒店名称或代码" value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} className="min-w-0 py-2 outline-none"/></label></div></div><p className="mb-3 text-xs text-slate-500">部分名称由官网链接生成；点击官网可核对酒店正式名称。</p><div className="divide-y">{hotels.map(h=><a key={h.id} href={h.officialUrl} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-3 py-3 text-sm hover:text-blue-700"><span><span className="mr-3 text-slate-400">{names[h.group]}</span>{h.name||h.nameFromUrl||h.id}<span className="ml-3 text-xs text-slate-400">{h.id}</span></span><ExternalLink className="size-4 shrink-0"/></a>)}</div>{!hotels.length&&<p className="py-8 text-center text-slate-500">暂无匹配酒店，目录同步后显示。</p>}<div className="mt-4 flex justify-between"><button className="rounded-lg border px-4 py-2 disabled:opacity-30" disabled={page===0} onClick={()=>setPage(page-1)}>上一页</button><span className="p-2 text-sm">第 {page+1} 页</span><button className="rounded-lg border px-4 py-2 disabled:opacity-30" disabled={(page+1)*50>=total} onClick={()=>setPage(page+1)}>下一页</button></div></section>
+      {!!monitor?.errors.length&&<section className="rounded-2xl border bg-white p-5"><h2 className="mb-3 font-bold">最近查询问题</h2>{monitor.errors.map(e=><p key={e.id} className="py-1 text-sm text-slate-600">{e.id}：{e.error}</p>)}</section>}
+      <footer className="text-xs text-slate-500">采集状态更新：{monitor?.updatedAt?time(monitor.updatedAt):"尚无记录"} · 所有统计来自本机采集，无演示房价。</footer>
     </div>
-  </div>;
+  </main>;
 }
+function Quotes({rows,alerts=false}:{rows:Quote[];alerts?:boolean}){
+  if(!rows.length)return <p className="rounded-xl bg-slate-50 py-10 text-center text-sm text-slate-500">{alerts?"暂无降价记录；需要同一入住日的前后两次有效报价。":"尚无通过日期核验的报价。可在下方查看查询问题。"}</p>;
+  return <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-500"><tr><th className="pb-3">酒店</th><th>入住日期</th><th>每晚报价</th><th>{alerts?"推送状态":"采集时间"}</th><th>官网</th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.hotel+r.checkIn+i} className="border-t"><td className="max-w-sm py-4 pr-3">{r.hotel}</td><td className="whitespace-nowrap pr-3">{r.checkIn}</td><td className="whitespace-nowrap pr-3 font-semibold">{r.currency} {r.price.toLocaleString()}{alerts&&<span className="ml-2 text-rose-600">-{r.drop}%</span>}</td><td className="pr-3 text-slate-500">{alerts?(r.telegramSent?"已发送":"待发送 / 重试"):time(r.checkedAt)}</td><td><a href={r.url} target="_blank" rel="noreferrer" className="text-blue-600">核对</a></td></tr>)}</tbody></table></div>;
+}
+

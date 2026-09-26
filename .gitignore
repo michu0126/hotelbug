@@ -50,4 +50,6 @@ next-env.d.ts
 /data/official-catalog.json.tmp
 /data/catalog-checkpoint.json
 /data/catalog-checkpoint.json.tmp
+/data/monitor.sqlite*
+/data/monitor-status.json*
 

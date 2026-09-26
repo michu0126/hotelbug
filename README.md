@@ -1,47 +1,63 @@
-# RateDrop 全球酒店价格雷达
+# RateDrop 全球酒店官网采集
 
-监控万豪、IHG、希尔顿、凯悦、GHA 等酒店集团未来 365 天价格，在异常降价时通过 Telegram 推送酒店名称、入住日期和价格。
+面向万豪、IHG、希尔顿、凯悦和 GHA 的官网酒店目录同步与房价查询。**目前未实现或验证全球全量房价覆盖**。网页仅展示本机实际采集结果。
 
-## Docker 运行
+## 群晖部署
+
+在 Container Manager 中使用仓库的 docker-compose.yml，并配置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。Compose 包含网页服务 ratedrop 和后台服务 monitor，共享 hotelbug-data 卷。现有用户需更新 Compose，只有拉取新镜像不会自动新增后台服务。
 
 ```bash
-docker run -d --name ratedrop -p 3000:3000 \
-  -e TELEGRAM_BOT_TOKEN=your_token \
-  -e TELEGRAM_CHAT_ID=your_chat_id \
-  -e HOTEL_RATE_API_URL=https://provider.example.com/scan \
-  -e HOTEL_RATE_API_KEY=your_key \
-  --restart unless-stopped \
-  ghcr.io/michu0126/hotelbug:latest
+docker compose pull
+docker compose up -d
 ```
 
-打开 `http://服务器IP:3000`，健康检查地址为 `/api/health`。
+打开 http://群晖IP:3000。当前镜像为 linux/amd64，适用于 x86_64 群晖；未发布 ARM 镜像。建议为浏览器预留至少 1 GB 内存。
 
-## 官网价格抓取（无需付费 API）
+## 实际行为与覆盖
 
-全球目录同步：`node scripts/sync-official-catalog.mjs`（容器内加 `docker exec hotelbug`）。从官网站点地图收集万豪和希尔顿酒店代码及官网链接，在 `data/official-catalog.json` 中保存来源和失败记录。IHG、凯悦目录入口也会检查；GHA 目录解析仍待实现。目录不自动加入房价扫描，未验证的酒店均标记 `rateStatus: unverified`。目录覆盖与未来365天价格覆盖是两个不同指标；当前尚未实现全球全量价格接入。
+- 从集团官网站点地图持续同步酒店，按酒店代码去重；GHA 还验证详情页类型。
+- 酒店名录自动导入 SQLite 查询队列，万豪、IHG、希尔顿、凯悦按各自预订链接查询；GHA 预订房价适配未完成，目录条目不会伪装为可查询房价。
+- 默认目标为未来365天，每批最多30次查询。每个酒店轮流处理入住日期，后台每批结束后等待300秒继续；这不代表每天能够查完所有酒店的365天。
+- 只有页面本身确认入住、离店日期，且明确显示币种和每晚价格，才保存报价。不仅依赖URL参数。
+- 同酒店、同日期、同币种的最低可见每晚价下降35%以上时，将降价线索写入持久化推送队列。它不是同房型、同税费或同取消政策的保证，也不是已确认的错误价。
+- 403、429或人机验证会暂停该集团6小时。普通页面识别失败1小时后再试。失败不会记录为零元。
+- 网页展示目录数量、待同步文件数、实际检查次数、近24小时有效报价、错误与推送状态；不含演示酒店价格。
+- 一次目录遍历结束仅表示站点地图已读取，无法证明官网未遗漏酒店或尚未营业的酒店已可预订。
 
-同步每个集团每次最多读取25个目录文件，重复运行会从 `catalog-checkpoint.json` 续接；`pendingPages` 表示待处理目录数。可用 `CATALOG_PAGES_PER_GROUP` 调整批量大小。请串行执行同步，避免同时写入检查点。
+2026-09-27 本机实测：万豪目录10,257条、IHG目录7,146条；希尔顿和GHA仍在分批遍历。四个房价示例本次均未通过检查：三个集团返回403，万豪未确认所请求日期。不能据此宣称已完成全量价格接入。
 
-镜像内置低频浏览器抓取器，默认示例包括 Conrad Maldives Rangali Island、Park Hyatt Sydney、New York Marriott Marquis 和 InterContinental New York Barclay。目标配置位于 `config/official-hotels.json`。支持 ISO 日期占位符 `{checkIn}` / `{checkOut}`、万豪常用的美式日期占位符 `{checkInUs}` / `{checkOutUs}`，以及 IHG 使用的日期和月份占位符 `{checkInDay}`、`{checkOutDay}`、`{checkInMonthYear}`、`{checkOutMonthYear}`。
+## 配置与手动命令
+
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| SCAN_DAYS | 365 | 目标日期范围，1–365 |
+| SCAN_BATCH_SIZE | 30 | 每个批次最多查询次数 |
+| CATALOG_PAGES_PER_GROUP | 25 | 每集团每批目录页面数 |
+| MONITOR_INTERVAL_SECONDS | 300 | 两批之间的间隔 |
+| SCRAPER_DELAY_MS | 5000 | 单次房价访问间隔，至少1500毫秒 |
+| DROP_THRESHOLD | 35 | 降价提醒百分比 |
+| SCRAPER_DATA_DIR | /app/data | 共享数据目录 |
 
 ```bash
+# 单独续跑目录
+docker exec hotelbug node scripts/sync-official-catalog.mjs
+# 单独执行一个房价批次
 docker exec hotelbug npm run scrape:rates
+# 查看后台状态
+docker compose logs --tail=100 monitor
 ```
 
-常用环境变量：
+目录检查点、酒店查询进度、报价与推送队列均持久化在共享卷。旧版 rate-history.json 保留但不导入为可信报价，新版会重新建立基准。Telegram未配置时降价消息保留待发送；发送失败最多重试10次，网络响应丢失时存在重复发送可能。
 
-- `SCAN_DAYS=7`：从明天开始扫描的天数，允许 1–365；不建议一次直接扫满一年。
-- `SCRAPER_DELAY_MS=5000`：两次页面访问之间的等待时间，最少强制 1500 毫秒。
-- `DROP_THRESHOLD=35`：相对上一次同酒店同入住日价格的 Telegram 推送阈值。
-- `SCRAPER_DATA_DIR=/app/data`：历史价格持久化目录；Compose 使用 `hotelbug-data` 数据卷。
+## 验证与发布
 
-抓取器只读取无需登录即可看到的公开价格，不绕过验证码、访问限制或登录。官网页面结构变化时，目标可能暂时无法识别价格；请先在浏览器中核对最终税费、房型与取消政策。
+```bash
+node --test scripts/monitor.test.mjs
+npm run lint
+npm run build:docker
+```
 
-2026-09-17 实测：IHG 示例返回了现金房价；万豪已添加查询配置，但当前测试环境未能取得房价（日期表单或访问拒绝），仍待验证。四个示例不代表集团全球酒店已全部接入。页面显示的最低报价可能包含会员价，预订条件以官网为准。
-
-## 自动发布镜像
-
-仓库推送到 `main` 后，GitHub Actions 会自动构建 `linux/amd64` 和 `linux/arm64` 镜像并发布到 GHCR。若仓库中配置 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`，同一流程也会发布到 Docker Hub。
+推送 main 后 GitHub Actions 构建并发布 GHCR 和 Docker Hub 镜像。群晖采用新版 Compose 后后台持续运行，无需另外配置任务计划。
 
 ## 原始 Sites 工程说明
 

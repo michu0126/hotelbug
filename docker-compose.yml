@@ -16,9 +16,35 @@ services:
       HOTEL_RATE_API_KEY: ${HOTEL_RATE_API_KEY:-}
       SCRAPER_TARGETS_FILE: /app/config/official-hotels.json
       SCRAPER_DATA_DIR: /app/data
-      SCAN_DAYS: ${SCAN_DAYS:-7}
+      SCAN_DAYS: ${SCAN_DAYS:-365}
+      SCRAPER_DELAY_MS: ${SCRAPER_DELAY_MS:-5000}
+      DROP_THRESHOLD: ${DROP_THRESHOLD:-35}
+      SCAN_BATCH_SIZE: ${SCAN_BATCH_SIZE:-30}
+
+  monitor:
+    image: michu0126/hotelbug:latest
+    container_name: hotelbug-monitor
+    command: ["node", "scripts/monitor.mjs"]
+    restart: unless-stopped
+    init: true
+    shm_size: "1gb"
+    healthcheck:
+      disable: true
+    volumes:
+      - hotelbug-data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SCRAPER_DATA_DIR: /app/data
+      SCRAPER_TARGETS_FILE: /app/config/official-hotels.json
+      SCAN_DAYS: ${SCAN_DAYS:-365}
+      SCAN_BATCH_SIZE: ${SCAN_BATCH_SIZE:-30}
+      CATALOG_PAGES_PER_GROUP: ${CATALOG_PAGES_PER_GROUP:-25}
+      MONITOR_INTERVAL_SECONDS: ${MONITOR_INTERVAL_SECONDS:-300}
       SCRAPER_DELAY_MS: ${SCRAPER_DELAY_MS:-5000}
       DROP_THRESHOLD: ${DROP_THRESHOLD:-35}
 
 volumes:
   hotelbug-data:
+
