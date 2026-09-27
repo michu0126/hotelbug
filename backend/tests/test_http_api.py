@@ -1,11 +1,14 @@
 import httpx
 import pytest
+from pydantic import SecretStr
 
-from app.api.main import app
+from app.api.main import app, settings
 from app.core.errors import ErrorCode, ProviderError
 from app.core.logging import redact
 from app.crawler.http import request
 from app.database.session import get_session
+from app.schemas.domain import HotelData
+from app.services.rates import upsert_hotel
 
 
 @pytest.mark.parametrize(
@@ -60,3 +63,42 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert result.status_code == 503
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_watchlist_create_and_update_via_api(sessions, monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", SecretStr("test-only"))
+    async with sessions() as db, db.begin():
+        hotel = await upsert_hotel(
+            db,
+            HotelData(
+                provider="marriott",
+                provider_hotel_id="NYCMQ",
+                hotel_name="New York Marriott Marquis",
+                official_url="https://www.marriott.com/hotels/travel/nycmq-new-york-marriott-marquis",
+            ),
+        )
+        hotel_id = hotel.id
+
+    async def dependency():
+        async with sessions() as db:
+            yield db
+
+    app.dependency_overrides[get_session] = dependency
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = {"authorization": "Bearer test-only"}
+            first = await client.post(
+                "/api/watchlists", headers=headers, json={"hotel_id": hotel_id, "days_ahead": 30}
+            )
+            assert first.status_code == 200
+            second = await client.post(
+                "/api/watchlists", headers=headers, json={"hotel_id": hotel_id, "days_ahead": 365}
+            )
+            assert second.status_code == 200
+            assert second.json()["id"] == first.json()["id"]
+            assert second.json()["filters"]["days_ahead"] == 365
+    finally:
+        app.dependency_overrides.clear()
+
