@@ -101,4 +101,3 @@ async def test_watchlist_create_and_update_via_api(sessions, monkeypatch):
             assert second.json()["filters"]["days_ahead"] == 365
     finally:
         app.dependency_overrides.clear()
-
