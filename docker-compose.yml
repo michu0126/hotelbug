@@ -1,7 +1,7 @@
 name: hotelbug-v2
 
 x-backend: &backend
-  image: ${HOTELBUG_API_IMAGE:-michu0126/hotelbug:phase1-api}
+  image: ${HOTELBUG_API_IMAGE:-michu0126/hotelbug:phase2-preview-api}
   build:
     context: .
     target: api
@@ -122,7 +122,7 @@ services:
       retries: 3
 
   hotel-monitor-frontend:
-    image: ${HOTELBUG_FRONTEND_IMAGE:-michu0126/hotelbug:phase1-frontend}
+    image: ${HOTELBUG_FRONTEND_IMAGE:-michu0126/hotelbug:phase2-preview-frontend}
     build:
       context: .
       target: frontend

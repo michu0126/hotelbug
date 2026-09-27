@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     def provider_policy(self, name: str) -> "ProviderPolicy":
         prefix = name.upper()
         return ProviderPolicy(
-            enabled=os.getenv(prefix + "_ENABLED", "true"),
+            enabled=os.getenv(prefix + "_ENABLED", "false"),
             concurrency=os.getenv(prefix + "_CONCURRENCY", str(self.provider_concurrency)),
             interval_seconds=os.getenv(
                 prefix + "_RATE_LIMIT_SECONDS", str(self.provider_min_interval_seconds)

@@ -7,7 +7,7 @@ from test_domain import fixture_rate
 from app.core.config import Settings
 from app.core.errors import ErrorCode, ProviderError
 from app.crawler.worker import process_one
-from app.models.tables import CrawlJob, PriceHistory, ProviderStatus, Rate, utcnow
+from app.models.tables import CrawlJob, PriceHistory, ProviderStatus, Rate, Watchlist, utcnow
 from app.providers.base import HotelProvider
 from app.providers.registry import FACTORIES
 from app.scheduler.main import tick
@@ -57,6 +57,7 @@ async def test_history_append_and_job_idempotency(sessions):
 
 
 async def test_scheduler_worker_and_redis_recovery(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
     monkeypatch.setitem(FACTORIES, "marriott", FixtureProvider)
     settings = Settings()
     async with sessions() as s, s.begin():
@@ -82,7 +83,8 @@ async def test_scheduler_worker_and_redis_recovery(sessions, queue, monkeypatch)
         assert (await s.get(ProviderStatus, "marriott")).status == "ONLINE"
 
 
-async def test_expired_worker_lease_is_recovered(sessions, queue):
+async def test_expired_worker_lease_is_recovered(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
     async with sessions() as s, s.begin():
         row = await enqueue(s, JobInput(provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK))
         row.status, row.lease_owner = "RUNNING", "dead-worker"
@@ -96,6 +98,8 @@ async def test_expired_worker_lease_is_recovered(sessions, queue):
 
 
 async def test_blocked_provider_is_paused(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+
     class Blocked(FixtureProvider):
         async def health_check(self):
             raise ProviderError(ErrorCode.BLOCKED_BY_ANTIBOT, "Access denied")
@@ -111,7 +115,8 @@ async def test_blocked_provider_is_paused(sessions, queue, monkeypatch):
         assert (await s.get(ProviderStatus, "marriott")).status == "BLOCKED"
 
 
-async def test_unimplemented_provider_does_not_fake_success(sessions, queue):
+async def test_unimplemented_provider_does_not_fake_success(sessions, queue, monkeypatch):
+    monkeypatch.setenv("ACCOR_ENABLED", "true")
     async with sessions() as s, s.begin():
         row = await enqueue(s, JobInput(provider="accor", kind=JobKind.PROVIDER_HEALTHCHECK))
         job_id = row.id
@@ -120,3 +125,40 @@ async def test_unimplemented_provider_does_not_fake_success(sessions, queue):
     async with sessions() as s:
         row = await s.get(CrawlJob, job_id)
         assert row.status == "FAILED" and row.error_type == "NOT_IMPLEMENTED"
+
+
+async def test_watchlist_incremental_jobs_respect_cooldown(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+    async with sessions() as s, s.begin():
+        hotel = await upsert_hotel(s, await FixtureProvider().get_hotel_details("fixture-only"))
+        s.add(
+            Watchlist(
+                name="One hotel", scope="hotel", filters={"hotel_id": hotel.id, "days_ahead": 2}, enabled=True
+            )
+        )
+    settings = Settings()
+    for _ in range(4):
+        await tick(sessions, queue, settings)
+    async with sessions() as s:
+        dates = (
+            await s.scalars(
+                select(CrawlJob.check_in)
+                .where(CrawlJob.kind == JobKind.FETCH_RATE, CrawlJob.hotel_id == hotel.id)
+                .order_by(CrawlJob.check_in)
+            )
+        ).all()
+        assert len(dates) == 3 and len(set(dates)) == 3
+        s.add(
+            ProviderStatus(provider="marriott", status="BLOCKED", blocked_until=utcnow() + timedelta(hours=6))
+        )
+        await s.commit()
+    await tick(sessions, queue, settings)
+    async with sessions() as s:
+        assert (
+            await s.scalar(
+                select(func.count())
+                .select_from(CrawlJob)
+                .where(CrawlJob.kind == JobKind.FETCH_RATE, CrawlJob.hotel_id == hotel.id)
+            )
+            == 3
+        )

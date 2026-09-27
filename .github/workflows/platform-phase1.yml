@@ -1,4 +1,4 @@
-name: Verify and publish Python platform foundation
+name: Verify and publish Marriott Phase 2 preview
 on:
   push:
     branches: [main]
@@ -97,6 +97,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            michu0126/hotelbug:phase1-${{ matrix.target }}
-            michu0126/hotelbug:phase1-${{ matrix.target }}-${{ github.sha }}
-            ghcr.io/michu0126/hotelbug:phase1-${{ matrix.target }}
+            michu0126/hotelbug:phase2-preview-${{ matrix.target }}
+            michu0126/hotelbug:phase2-preview-${{ matrix.target }}-${{ github.sha }}
+            ghcr.io/michu0126/hotelbug:phase2-preview-${{ matrix.target }}

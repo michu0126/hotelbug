@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import date, timedelta
 from hmac import compare_digest
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,9 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.database.session import get_session
-from app.models.tables import CrawlJob, Hotel, PriceAlert, PriceHistory, ProviderStatus, Rate, utcnow
+from app.models.tables import (
+    CrawlJob,
+    Hotel,
+    PriceAlert,
+    PriceHistory,
+    ProviderStatus,
+    Rate,
+    Watchlist,
+    utcnow,
+)
 from app.providers.registry import FACTORIES
 from app.schemas.domain import HotelData, JobInput, JobKind, ProviderName
+from app.services.calendar import get_calendar, month_bounds, month_dates
 from app.services.jobs import enqueue
 from app.services.rates import upsert_hotel
 
@@ -29,7 +40,7 @@ async def lifespan(application: FastAPI):
     await redis.aclose()
 
 
-app = FastAPI(title="Hotel Bug Price Monitor", version="2.0.0-phase1", lifespan=lifespan)
+app = FastAPI(title="Hotel Bug Price Monitor", version="2.0.0-phase2-preview", lifespan=lifespan)
 Db = Annotated[AsyncSession, Depends(get_session)]
 
 
@@ -47,7 +58,7 @@ def encode(row) -> dict:
 
 @app.get("/api/health/live")
 async def live():
-    return {"status": "ok", "phase": 1}
+    return {"status": "ok", "phase": "2-preview"}
 
 
 @app.get("/api/health/ready")
@@ -64,8 +75,8 @@ async def ready(db: Db):
 async def dashboard(db: Db):
     midnight = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return {
-        "phase": 1,
-        "message": "基础框架已运行；尚未接入生产 Provider，不生成模拟报价。",
+        "phase": "2-preview",
+        "message": "万豪公开报价适配器处于实验阶段；独立 HTTP 访问尚未验证成功，默认关闭。",
         "hotels": await db.scalar(select(func.count()).select_from(Hotel)),
         "rates_today": await db.scalar(
             select(func.count()).select_from(PriceHistory).where(PriceHistory.captured_at >= midnight)
@@ -92,8 +103,8 @@ async def providers(db: Db):
             if state
             else {
                 "provider": name,
-                "status": "BROKEN",
-                "last_error": "NOT_IMPLEMENTED",
+                "status": "DEGRADED" if name == ProviderName.MARRIOTT else "BROKEN",
+                "last_error": "HTTP_UNVERIFIED" if name == ProviderName.MARRIOTT else "NOT_IMPLEMENTED",
                 "requests_today": 0,
                 "success_count": 0,
                 "failure_count": 0,
@@ -101,6 +112,9 @@ async def providers(db: Db):
         )
         item["implemented"] = name in FACTORIES
         item["enabled"] = settings.provider_policy(name).enabled and item["implemented"]
+        item["verification"] = (
+            "BROWSER_OBSERVED_HTTP_UNVERIFIED" if name == ProviderName.MARRIOTT else "NOT_IMPLEMENTED"
+        )
         total = item["success_count"] + item["failure_count"]
         item["success_rate"] = item["success_count"] / total if total else None
         result.append(item)
@@ -160,6 +174,94 @@ async def history(hotel_id: str, db: Db, days: int = Query(30, ge=1, le=90), off
         encode(r)
         for r in (await db.scalars(query.order_by(PriceHistory.captured_at.desc()).limit(1000))).all()
     ]
+
+
+@app.get("/api/hotels/{hotel_id}/calendar")
+async def calendar(hotel_id: str, db: Db, month: str):
+    hotel = await db.get(Hotel, hotel_id)
+    if not hotel:
+        raise HTTPException(404, "Hotel not found")
+    try:
+        month_bounds(month)
+    except ValueError:
+        raise HTTPException(422, "month must be YYYY-MM") from None
+    return await get_calendar(db, hotel, month)
+
+
+@app.post("/api/hotels/{hotel_id}/calendar/jobs", dependencies=[Depends(admin)])
+async def enqueue_calendar(hotel_id: str, db: Db, month: str):
+    hotel = await db.get(Hotel, hotel_id)
+    if not hotel:
+        raise HTTPException(404, "Hotel not found")
+    if hotel.provider != ProviderName.MARRIOTT or hotel.provider not in FACTORIES:
+        raise HTTPException(409, "No verified calendar adapter for this hotel")
+    if not settings.provider_policy(hotel.provider).enabled:
+        raise HTTPException(409, "Provider disabled")
+    try:
+        dates = month_dates(month)
+    except ValueError:
+        raise HTTPException(422, "month must be YYYY-MM") from None
+    today = date.today()
+    eligible = [day for day in dates if today <= day <= today + timedelta(days=365)]
+    if not eligible:
+        raise HTTPException(422, "Month outside the next 365 days")
+    rows = [
+        await enqueue(
+            db,
+            JobInput(
+                provider=ProviderName.MARRIOTT,
+                kind=JobKind.FETCH_CALENDAR,
+                hotel_id=hotel.id,
+                check_in=day,
+                check_out=day + timedelta(days=1),
+                priority=60,
+            ),
+        )
+        for day in eligible
+    ]
+    await db.commit()
+    return {"month": month, "queued_dates": len(eligible), "job_ids": [r.id for r in rows]}
+
+
+class HotelWatchInput(BaseModel):
+    hotel_id: str
+    days_ahead: int = Field(default=30, ge=1, le=365)
+
+
+@app.get("/api/watchlists")
+async def watchlists(db: Db):
+    rows = (await db.scalars(select(Watchlist).order_by(Watchlist.created_at).limit(100))).all()
+    return [encode(row) for row in rows]
+
+
+@app.post("/api/watchlists", dependencies=[Depends(admin)])
+async def add_watchlist(data: HotelWatchInput, db: Db):
+    hotel = await db.get(Hotel, data.hotel_id)
+    if not hotel:
+        raise HTTPException(404, "Hotel not found")
+    if hotel.provider != ProviderName.MARRIOTT:
+        raise HTTPException(409, "Only Marriott hotel watchlists are in Phase 2 preview")
+    existing = await db.scalar(
+        select(Watchlist).where(
+            Watchlist.scope == "hotel",
+            Watchlist.enabled.is_(True),
+            Watchlist.filters["hotel_id"].as_string() == hotel.id,
+        )
+    )
+    if existing:
+        existing.filters = {"hotel_id": hotel.id, "days_ahead": data.days_ahead}
+        await db.commit()
+        return encode(existing)
+    row = Watchlist(
+        name=hotel.hotel_name,
+        scope="hotel",
+        filters={"hotel_id": hotel.id, "days_ahead": data.days_ahead},
+        enabled=True,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return encode(row)
 
 
 @app.get("/api/jobs")

@@ -1,6 +1,6 @@
 # Hotel Bug Price Monitor
 
-自托管酒店价格情报平台，目标部署环境为群晖/Linux/Docker。当前为 **Phase 1 基础框架**，不是六集团报价已接入的完成版。
+自托管酒店价格情报平台，目标部署环境为群晖/Linux/Docker。当前为 **Phase 2 万豪实验预览版**，不是六集团报价已接入的完成版。
 
 ## 当前交付与边界
 
@@ -8,8 +8,8 @@
 - 六服务 Compose、独立 Scheduler 与 Worker、持久化任务、优先级、去重、租约恢复、独立 Provider 限流。
 - 标准化 Hotel/Rate 数据结构、Decimal 金额、10 张数据库表、追加式历史、报价身份隔离。
 - Vue 3 + Vite 真实基础状态页；无演示报价。
-- **生产 Provider 尚未注册，当前不会自动采集官网报价。Marriott 是下一阶段首个实现目标。**
-- 异常评分/二次验证/通知发送、完整价格日历/趋势/Watchlist UI 属于后续阶段，基础表不等于功能已完成。
+- Marriott 官网浏览器中实测了 NYCMQ 的有效日期、酒店详情与55条房型报价；增加了官方 GraphQL 解析适配器、同报价历史日历、手动按月排队及单酒店自动监控。**独立 HTTP 测试未成功，NAS 实采仍未验收，默认关闭。**
+- 异常评分/二次验证/通知发送、完整趋势/多范围 Watchlist UI 属于后续阶段，基础表不等于功能已完成。
 - [实施计划](IMPLEMENTATION_PLAN.md) / [Provider 研究记录](docs/providers/)。
 
 ## 旧版用户：不要直接覆盖正在运行的部署
@@ -18,13 +18,13 @@
 旧 Compose 在 `docker/compose.legacy.yml`，旧镜像构建定义在 `docker/legacy.Dockerfile`，旧说明在 [LEGACY_README](docs/LEGACY_README.md)。
 旧数据卷不删除、不自动转换。最低价快照不具备严格同房型/Rate Plan 历史，不能直接导入异常基线。
 
-新版使用独立 Compose 项目名 `hotelbug-v2`、独立卷和 `phase1-api` / `phase1-frontend` 镜像标签。
+新版使用独立 Compose 项目名 `hotelbug-v2`、独立卷和 `phase2-preview-api` / `phase2-preview-frontend` 镜像标签。
 并行验证时将 WEB_PORT 设为 **8099**，避免占用旧版8098。旧版可以继续运行。
 恢复旧版时沿用原项目名、原卷和原Compose；不要用新项目名挂载空卷误以为数据丢失。
 
 ## 新版部署
 
-Intel/AMD x86_64 群晖；当前只发布 amd64，ARM64尚未验证。基础阶段无 Chromium，不运行大量浏览器。
+Intel/AMD x86_64 群晖；当前只发布 amd64，ARM64尚未验证。镜像无 Chromium；万豪适配器直接请求官网观察到的 JSON 端点。
 建议 NAS 至少预留1GB内存，实际消耗以部署监测为准。
 
 ```bash
@@ -53,7 +53,10 @@ Compose 会按依赖健康顺序启动数据库、迁移/API、Worker、Schedule
 并发、请求间隔、任务超时、调度周期见 .env.example。每个Provider有独立Redis锁/限流键，默认同一Provider并发1、间隔5秒。
 最大任务重试3次、指数退避+jitter。403/挑战暂停6小时，429至少暂停1小时且不早于Retry-After。
 任务租约超过执行超时60秒；崩溃任务可恢复，重复崩溃达到上限后终止。
-通知变量 TELEGRAM_BOT_TOKEN/CHAT_ID、BARK_URL、WEBHOOK_URL 已预留；**Phase 1 不发送通知**，适配器在Phase3实现。
+通知变量 TELEGRAM_BOT_TOKEN/CHAT_ID、BARK_URL、WEBHOOK_URL 已预留；**当前不发送通知**，适配器在Phase3实现。
+
+Marriott 默认 `MARRIOTT_ENABLED=false`。在 NAS 上启用前需确认网络出口可访问官网；启用后健康检查按小时低频尝试 NYCMQ 未来单晚。403/挑战会暂停6小时。浏览器能显示报价并不能证明群晖独立 HTTP 请求能成功。
+单酒店 Watchlist 可选未来30/90/365天，Scheduler 轮转日期且按 HOT/WARM/COLD 间隔去重；不会每次扫描全球酒店×365天。要自动采集须先启用 Provider、添加酒店代码并保存自动监控。多酒店/城市/国家批量监控尚未实现。
 
 ## 增加酒店 / Provider
 
@@ -61,12 +64,15 @@ API文档 `/docs` 在API容器端口8000可访问；前端只反代/api，常用
 - GET /api/dashboard、/api/providers、/api/jobs
 - GET /api/hotels?q=Shanghai&provider=marriott
 - GET /api/hotels/{id}、/api/hotels/{id}/history?days=30
+- GET /api/hotels/{id}/calendar?month=2026-10（真实报价日历，缺失日期显示 NO_DATA）
 - POST /api/hotels（Authorization: Bearer ADMIN_TOKEN）
-- POST /api/jobs（同认证，未注册Provider返回409，不发送猜测请求）
+- POST /api/jobs（同认证，万豪 DISCOVER_HOTELS 可用 `payload.provider_hotel_id` 指定五位代码）
+- POST /api/hotels/{id}/calendar/jobs?month=2026-10（同认证，为未来365天范围内该月逐日生成任务）
+- GET/POST /api/watchlists（POST 请求 `{"hotel_id":"...","days_ahead":30}`，需管理令牌；仅单万豪酒店）
 
 增加适配器必须先完善 docs/providers/<group>.md，再继承 HotelProvider。
 只返回统一Pydantic模型，不向业务层泄漏原始JSON。注册到FACTORIES后才启用任务处理。
-当前研究全部明确标注未知项，禁止把样本或未完成适配器标ONLINE。
+当前研究全部明确标注未知项，只有实际成功解析后才标 ONLINE；其他未实现 Provider 不启用。
 HTTP错误工具在 crawler/http.py；无需浏览器的Provider不得引入浏览器。
 配置、浏览器Session与Raw Fixture必须脱敏；单元测试使用本地fixture，不访问酒店网站。
 
@@ -111,7 +117,7 @@ docker compose logs --tail=100 hotel-monitor-worker hotel-monitor-scheduler
 ```
 
 切勿执行 `docker compose down -v`。升级前备份，破坏性迁移需要人工确认。
-新版框架镜像阶段标签与旧latest分开，未完成Provider前不自动切换旧版用户。
+新版预览镜像与旧 latest、Phase1 镜像标签分开，不自动切换旧版用户。
 
 ## 备份与恢复
 
@@ -136,4 +142,4 @@ docker compose up -d
 ## 阶段验收
 
 Phase 0 已提交计划。Phase 1 本地22项测试、前端构建，以及CI Python3.12离线/真实PostgreSQL与Redis测试、迁移往返、六容器健康启动均通过。
-[查看验收流水线](https://github.com/michu0126/hotelbug/actions/runs/36334647062)。完整进度在 IMPLEMENTATION_PLAN.md 更新。
+[Phase 1 验收流水线](https://github.com/michu0126/hotelbug/actions/runs/36334647062)。Phase 2 仍有 NAS 官网独立 HTTP 验证、自动 Watchlist 等待完成，进度在 IMPLEMENTATION_PLAN.md 更新。

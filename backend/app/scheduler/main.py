@@ -14,6 +14,7 @@ from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
 from app.services.jobs import enqueue
 from app.services.queue import Queue
+from app.services.watchlists import expand_watchlists
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ async def tick(sessions: async_sessionmaker, queue: Queue, settings: Settings) -
                     await enqueue(
                         session, JobInput(provider=provider, kind=JobKind.PROVIDER_HEALTHCHECK, priority=10)
                     )
+            await expand_watchlists(session, settings)
             return dispatched
     finally:
         await queue.unlock("hotelbug:scheduler", token)

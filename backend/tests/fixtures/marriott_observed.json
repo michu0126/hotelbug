@@ -1,0 +1,74 @@
+{
+  "observed_at": "2026-09-28",
+  "source": "Marriott public website, NYCMQ 2026-10-07 to 2026-10-08, 1 room, 2 adults",
+  "rates": {
+    "data": {
+      "commerce": {
+        "product": {
+          "searchProductsByProperty": {
+            "__typename": "ProductSearchByPropertyConnection",
+            "total": 1,
+            "edges": [{
+              "node": {
+                "__typename": "HotelRoom",
+                "id": "TllDTVF8QVAwS3xEQkRCfDIwMjYtMTAtMDd8MjAyNi0xMC0wOHxjOTZjMTZlYy1jZGM1LTRkMGYtYjhjNi0xYWFlMDU5ODllMjQ",
+                "basicInformation": {
+                  "name": "Deluxe",
+                  "description": "Guest room, 2 Double",
+                  "type": "dbdb",
+                  "isMembersOnly": true,
+                  "ratePlan": [{"ratePlanCode": "AP0K"}]
+                },
+                "rates": {
+                  "name": "Member Rate Prepay Non-refundable Non-changeable",
+                  "rateModes": {
+                    "__typename": "HotelRoomRateModesCash",
+                    "averageNightlyRatePerUnit": {
+                      "amount": {"amount": 115200, "currency": "USD", "decimalPoint": 2}
+                    }
+                  }
+                },
+                "totalPricing": {
+                  "quantity": 1,
+                  "rateModes": {
+                    "grandTotal": {"amount": {"amount": 137706, "currency": "USD", "decimalPoint": 2}},
+                    "subtotalPerQuantity": {"amount": {"amount": 115200, "currency": "USD", "decimalPoint": 2}},
+                    "totalMandatoryFeesPerQuantity": {"amount": {"amount": 4500, "currency": "USD", "decimalPoint": 2}}
+                  }
+                }
+              }
+            }]
+          }
+        }
+      }
+    }
+  },
+  "hotel": {
+    "data": {
+      "catalog": {
+        "propertyById": {
+          "__typename": "Hotel",
+          "id": "NYCMQ",
+          "seoNickname": "nycmq-new-york-marriott-marquis",
+          "basicInformation": {
+            "brand": {"id": "MC"},
+            "currency": "USD",
+            "latitude": 40.758855,
+            "longitude": -73.985869,
+            "name": "New York Marriott Marquis"
+          },
+          "contactInformation": {
+            "address": {
+              "city": "New York",
+              "country": {"code": "US"},
+              "line1": "1535 Broadway",
+              "line2": null,
+              "line3": null,
+              "stateProvince": {"description": "New York"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

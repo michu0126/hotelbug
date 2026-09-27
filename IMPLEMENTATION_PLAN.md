@@ -4,13 +4,13 @@
 
 最新需求文档为本次重构依据，覆盖此前“仅解析页面”和“仅 UI 配置”的限制。
 先研究官网实际 JSON 请求，HTTP 页面其次，必要时才用浏览器；不猜测 Endpoint，不绕过访问控制。
-本轮交付 Phase 0 + Phase 1，不同时实现六家 Provider，不声称基础框架已能查询全球房价。
+Phase 0 + Phase 1 已完成；本轮继续 Phase 2 万豪。其他五家 Provider 不提前实现。
 
 | 阶段 | 范围 | 当前状态/验收 |
 | --- | --- | --- |
 | 0 | 架构、模型、队列、Provider 路线与迁移设计 | 已完成设计；旧版基线测试、构建已通过；本机无 Docker 引擎 |
 | 1 | FastAPI / PostgreSQL / Redis / Alembic / Worker / Scheduler / 六服务 Compose | 完成：本地22项测试；CI离线22项及真实PG/Redis22项、迁移往返、六容器健康启动全部通过 |
-| 2 | 只实现 Marriott，搜索/详情/房价/历史/日历 | 待开始；先验证官网有效日期搜索流程 |
+| 2 | 只实现 Marriott，搜索/详情/房价/历史/日历 | 进行中：浏览器官网真报价请求/字段已验证，解析器/历史/日历/单酒店Watchlist已开发；独立HTTP及NAS仍未验收，全球批量发现未完成 |
 | 3 | 中位数基线、评分、历史低价、二次确认、通知 | 待开始 |
 | 4 | Vue 完整业务 Dashboard / 搜索 / 日历 / 趋势 / 配置 | 待开始；Phase 1 仅提供真实基础状态页 |
 | 5 | Hilton / Hyatt / IHG 独立适配 | 待开始 |
@@ -63,7 +63,7 @@ NULL 不是 false，未知房型或 Rate Plan 的最低价不能用于高置信 
 
 独立异步适配器：search_hotels(query)、get_hotel_details(id)、search_rates(request)、get_calendar_rates(request)、health_check()。
 统一 Pydantic Hotel/Rate/SearchRequest/HealthResult；核心服务不能读取集团原始 JSON。
-可选依赖只由需要的 Provider 导入。Phase 1 只定义接口/注册表，不发布六个返回假数据的实现。
+可选依赖只由需要的 Provider 导入。Phase 2 仅注册 Marriott 实验适配器，其他五家不发布返回假数据的实现。
 错误统一：NETWORK_ERROR、TIMEOUT、HTTP_ERROR、PARSER_ERROR、INVALID_RESPONSE、RATE_LIMITED、BLOCKED_BY_ANTIBOT、TOKEN_EXPIRED、PROVIDER_CHANGED、NOT_IMPLEMENTED。
 403/挑战中止，429 按 Retry-After 或保守退避；不复制会话到日志，不做验证码绕过。
 
@@ -77,7 +77,7 @@ Worker 崩溃时，Scheduler 恢复过期租约；Redis 清空后从 PG 重建�
 Provider 并发令牌与最小请求间隔使用 Redis 原子 Lua；单任务超时小于租约与锁 TTL。
 失败有限次数指数退避 + jitter；解析/权限错误不无限重试；某 Provider 被封锁不影响其他 Provider。
 Scheduler 使用分布式领导锁，任务扫描分页，避免一次构造全酒店×365日任务。
-Phase 1 验证持久化队列恢复、去重、限流与健康检查骨架；Watchlist 批次生产、波动权重和日期游标在 Phase 2/7 接入。
+Phase 1 验证持久化队列恢复、去重、限流与健康检查骨架；Phase 2 接入单酒店Watchlist日期游标，全球酒店批量发现和波动权重留给后续阶段。
 
 默认目标 HOT 0–30 天每3小时、WARM 31–90 天每9小时、COLD 91–365 天每48小时；目录每14天、健康检查每小时。
 优先级：二次验证 > Watchlist > 近期/近期异常 > 波动酒店 > 普通远期；相同任务短期缓存。
@@ -104,7 +104,7 @@ Telegram/Bark/Webhook 优先；Email 后续。通知失败走持久化重试，�
 镜像 Python3.12 slim，基础阶段不安装 Chromium，减少内存；Vue 编译产物由 Nginx 提供。
 所有配置通过环境变量，时区默认 Asia/Shanghai，数据 /data、日志 /logs，标准输出结构化 JSON 并轮转。
 Alembic 仅 API 启动时迁移，Worker/Scheduler 等待健康依赖，避免多进程同时迁移。
-旧版 latest 保留；新版本使用 phase1-api / phase1-frontend 标签，基础框架未完成 Provider 前不覆盖稳定镜像。
+旧版 latest 与 Phase1 镜像保留；Phase2 预览用独立 phase2-preview-api / phase2-preview-frontend 标签，不覆盖稳定镜像。
 amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 测试 Compose：启动依赖→迁移→API ready→投递 fixture 任务→worker处理→重启/Redis丢失恢复→容器健康。
 开发机没有 Docker，真实 Docker 验证由 GitHub Actions 执行；没有成功记录前不标为通过。
@@ -114,7 +114,7 @@ amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 
 | 集团 | 已有证据 | 下一步；明确禁止猜接口 |
 | --- | --- | --- |
-| Marriott | 旧日期 URL 200但未建立日期搜索；/mi/query/phoenixShopAdvSearchInventoryDate仅预订日期上限 | 从真实搜索表单查有效报价请求，再做字段与会话研究；阻塞时标BLOCKED/DEGRADED |
+| Marriott | 官网正常表单实测 2026-10-07/08、NYCMQ，酒店列表和55条房型报价200；详情、报价GraphQL均已记录 | 独立HTTP首页403、报价POST连接失败；NAS出口验收，不能把浏览器成功等同自动采集成功；阻塞时标BLOCKED/DEGRADED |
 | IHG | robots可读，旧redirect样本403 | 从集团官网实际搜索流程抓取请求；先证实日期、品牌、税费，不直接沿用旧URL |
 | Hyatt | robots429，房价页403/E6020 | 暂停并记录；正常访问恢复后研究公开请求，无绕过 |
 | Hilton | sitemap可读，房价页403 | 同上；不把目录可读视作房价可用 |
