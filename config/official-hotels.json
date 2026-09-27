@@ -1,5 +1,12 @@
 [
   {
+    "id": "gha:310679",
+    "group": "gha",
+    "code": "310679",
+    "name": "NH Collection Dubai Ibn Battuta",
+    "officialUrl": "https://www.ghadiscovery.com/nh-hotels-resorts/nh-collection-dubai-ibn-battuta"
+  },
+  {
     "id": "hilton-conrad-maldives",
     "group": "hilton",
     "name": "Conrad Maldives Rangali Island",
@@ -28,4 +35,3 @@
     "urlTemplate": "https://www.ihg.com/redirect?path=rates&brandCode=IC&localeCode=en&regionCode=1&hotelCode=NYCHA&checkInDate={checkInDay}&checkInMonthYear={checkInMonthYear}&checkOutDate={checkOutDay}&checkOutMonthYear={checkOutMonthYear}&numberOfRooms=1&numberOfAdults=2&numberOfChildren=0"
   }
 ]
-

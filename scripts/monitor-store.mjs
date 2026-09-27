@@ -17,6 +17,7 @@ export function openStore(dir = dataDir) {
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
   `);
   if (!db.prepare('PRAGMA table_info(hotels)').all().some(c=>c.name==='next_offset')) db.exec('ALTER TABLE hotels ADD COLUMN next_offset INTEGER DEFAULT 1');
+  db.prepare("UPDATE hotels SET state='unverified' WHERE group_name='gha' AND state='needs_booking_adapter'").run();
   return db;
 }
 export function planDate(db, job, days, today) {
@@ -40,13 +41,13 @@ export function acquireLease(db, name, ttl = 180000) {
 export function importHotels(db, hotels) {
   const insert = db.prepare(`INSERT INTO hotels(id,group_name,definition,state) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET definition=excluded.definition`);
   db.exec('BEGIN');
-  try { for (const h of hotels) insert.run(h.id,h.group,JSON.stringify(h),h.group === 'gha' ? 'needs_booking_adapter' : 'unverified'); db.exec('COMMIT'); } catch(e) {db.exec('ROLLBACK');throw e;}
+  try { for (const h of hotels) insert.run(h.id,h.group,JSON.stringify(h),'unverified'); db.exec('COMMIT'); } catch(e) {db.exec('ROLLBACK');throw e;}
 }
 export function selectHotel(db, now = Date.now()) {
-  return db.prepare(`SELECT * FROM hotels WHERE group_name != 'gha' AND retry_at<=? AND NOT EXISTS(SELECT 1 FROM cooldowns c WHERE c.group_name=hotels.group_name AND c.until_at>?) ORDER BY last_attempt,id LIMIT 1`).get(now,now);
+  return db.prepare(`SELECT * FROM hotels WHERE retry_at<=? AND NOT EXISTS(SELECT 1 FROM cooldowns c WHERE c.group_name=hotels.group_name AND c.until_at>?) ORDER BY last_attempt,id LIMIT 1`).get(now,now);
 }
 export function saveSample(db, hotel, record, threshold) {
-  const basis = 'lowest-visible-nightly-2-adults-1-room-v1';
+  const basis = record.basis || 'lowest-visible-nightly-2-adults-1-room-v1';
   const prior = db.prepare('SELECT * FROM samples WHERE hotel_id=? AND check_in=? AND currency=? AND basis=?').get(hotel.id,record.checkIn,record.currency,basis);
   db.exec('BEGIN');
   try {
@@ -66,7 +67,7 @@ export async function writeStatus(db, extra = {}) {
   const now = Date.now(), today = new Date().toISOString().slice(0,10);
   const groups = db.prepare(`SELECT group_name AS name, COUNT(*) AS hotels, SUM(checks) AS checks, SUM(state='ok') AS successfulHotels, SUM(state='error') AS failedHotels, SUM(state='needs_booking_adapter') AS unsupportedHotels FROM hotels GROUP BY group_name`).all();
   const samples = db.prepare('SELECT COUNT(*) AS count FROM samples WHERE check_in>=? AND checked_at>?').get(today,now-86400000).count;
-  const latest = db.prepare('SELECT s.*,h.definition FROM samples s JOIN hotels h ON h.id=s.hotel_id WHERE check_in>=? ORDER BY checked_at DESC LIMIT 30').all(today).map(row => ({hotel:JSON.parse(row.definition).name || JSON.parse(row.definition).nameFromUrl,checkIn:row.check_in,currency:row.currency,price:row.price,checkedAt:new Date(row.checked_at).toISOString(),url:row.url}));
+  const latest = db.prepare('SELECT s.*,h.definition FROM samples s JOIN hotels h ON h.id=s.hotel_id WHERE check_in>=? ORDER BY checked_at DESC LIMIT 30').all(today).map(row => ({hotel:JSON.parse(row.definition).name || JSON.parse(row.definition).nameFromUrl,checkIn:row.check_in,basis:row.basis,currency:row.currency,price:row.price,checkedAt:new Date(row.checked_at).toISOString(),url:row.url}));
   const alerts = db.prepare('SELECT payload,sent_at,attempts FROM alerts ORDER BY created_at DESC LIMIT 30').all().map(a=>({...JSON.parse(a.payload),telegramSent:!!a.sent_at,attempts:a.attempts}));
   const errors = db.prepare('SELECT id,group_name,error,last_attempt FROM hotels WHERE error IS NOT NULL ORDER BY last_attempt DESC LIMIT 10').all();
   const workerLease = db.prepare("SELECT expires FROM leases WHERE name='rates'").get();
@@ -74,4 +75,3 @@ export async function writeStatus(db, extra = {}) {
   const file = path.join(dataDir,'monitor-status.json');
   await writeFile(`${file}.tmp`,JSON.stringify(status));await rename(`${file}.tmp`,file);
 }
-

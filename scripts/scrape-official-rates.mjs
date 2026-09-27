@@ -4,6 +4,7 @@ await applySettings();
 import { access, readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { rateUrl, nightlyPrices, datesPresent } from './official-adapters.mjs';
+import { scrapeGhaPage } from './gha-page.mjs';
 import { openStore, acquireLease, importHotels, selectHotel, planDate, saveSample, writeStatus } from './monitor-store.mjs';
 
 const days = Math.max(1,Math.min(365,Number(process.env.SCAN_DAYS)||365));
@@ -26,7 +27,7 @@ async function sendPending() {
     try {
       const response=await fetch('https://api.telegram.org/bot'+token+'/sendMessage',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({chat_id:chat,text:['酒店官网降价线索',a.hotel,'入住：'+a.checkIn+'（1晚，2成人，1间）',a.currency+' '+a.price+'，上次 '+a.previousPrice+'，下降 '+a.drop+'%',a.url,'最低可见每晚价；房型、会员资格、税费和取消政策请以官网为准。'].join('\n'),disable_web_page_preview:true}),
+        body:JSON.stringify({chat_id:chat,text:['酒店官网降价线索',a.hotel,'入住：'+a.checkIn+'（1晚，2成人，1间）',a.currency+' '+a.price+'，上次 '+a.previousPrice+'，下降 '+a.drop+'%',a.basis?.startsWith('gha-')?'非会员未税起价，房型可能变化':'最低可见每晚价',a.url,'最低可见每晚价；房型、会员资格、税费和取消政策请以官网为准。'].join('\n'),disable_web_page_preview:true}),
         signal:AbortSignal.timeout(15000)
       });
       const result=await response.json();
@@ -40,6 +41,7 @@ try {
   const file=process.env.SCRAPER_TARGETS_FILE || path.resolve('config/official-hotels.json');
   const examples=JSON.parse(await readFile(file,'utf8'));
   const definitions=examples.flatMap(h=>{
+    if(h.group==='gha' && h.officialUrl && h.code)return [{...h,id:'gha:'+h.code}];
     const u=new URL(h.urlTemplate);
     const code=u.searchParams.get('propertyCode')||u.searchParams.get('ctyhocn')||u.searchParams.get('hotelCode')||(h.group==='hyatt'?u.pathname.split('/').filter(Boolean).at(-1):null);
     return code?[{...h,id:h.group+':'+code.toLowerCase(),code,nameVerified:true,officialUrl:u.origin}]:[];
@@ -62,6 +64,12 @@ try {
     const now=Date.now();
     db.prepare('UPDATE hotels SET last_attempt=?,checks=checks+1 WHERE id=?').run(now,hotel.id);
     try{
+      if(hotel.group==='gha'){
+        const record=await scrapeGhaPage(page,hotel,checkIn,checkOut);
+        saveSample(db,hotel,record,threshold);
+        db.prepare("UPDATE hotels SET state='ok',error=NULL,next_offset=?,retry_at=? WHERE id=?").run(nextOffset,now+60000,hotel.id);
+        results.push({hotelId:hotel.id,...record});
+      }else{
       if(!url) throw new Error('尚无此集团的日期预订适配器');
       const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
       if(!response || response.status()>=400) throw new Error('HTTP '+(response?.status()||'no-response'));
@@ -89,8 +97,9 @@ try {
         db.prepare("UPDATE hotels SET state='ok',error=NULL,next_offset=?,retry_at=? WHERE id=?").run(nextOffset,now+60000,hotel.id);
         results.push({hotelId:hotel.id,...record});
       }
+      }
     }catch(error){
-      const message=error.message;
+      const message=[error.message,error.cause?.code].filter(Boolean).join(' / ');
       const blocked=/HTTP (403|429)|访问拒绝|人机验证/.test(message);
       const retry=now+(blocked?6:1)*3600000;
       db.prepare("UPDATE hotels SET state='error',error=?,retry_at=? WHERE id=?").run(message,retry,hotel.id);

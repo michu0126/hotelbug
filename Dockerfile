@@ -34,6 +34,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/official-adapters.mjs ./s
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/monitor-store.mjs ./scripts/monitor-store.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/monitor.mjs ./scripts/monitor.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/settings.mjs ./scripts/settings.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/gha-page.mjs ./scripts/gha-page.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/config ./config
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=deps --chown=nextjs:nodejs /app/node_modules/playwright-core ./node_modules/playwright-core

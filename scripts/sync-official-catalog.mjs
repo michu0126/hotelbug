@@ -54,9 +54,9 @@ try {
           const hotel=ghaFromHtml(body,url);if(hotel) hotels.set(hotel.id,hotel);
         } else throw new Error('Not an XML sitemap');
       } catch(error) {
-        report.failures.push({url,error:error.message});
+        report.failures.push({url,error:[error.message,error.cause?.code].filter(Boolean).join(' / ')});
         if(!/HTTP (404|410)/.test(error.message)) {seen.delete(url);queue.push(url);}
-        if(!/HTTP (404|410)/.test(error.message)) retryAt=Date.now()+6*3600000;
+        if(!/HTTP (404|410)/.test(error.message)) retryAt=Date.now()+(/HTTP (403|429)/.test(error.message)?6*3600000:5*60000);
       }
       report.hotels=[...hotels.values()].filter(h=>h.group===group).length;
       const pending=[...new Set(queue)].filter(u=>!seen.has(u));

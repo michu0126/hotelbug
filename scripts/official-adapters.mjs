@@ -34,7 +34,7 @@ export function ghaFromHtml(html, url) {
   if (!raw) return null;
   const page = JSON.parse(raw)?.props?.pageProps?.page;
   if (page?.type !== 'hotel') return null;
-  return { id: `gha:${page._info.id}`, code: String(page._info.id), group: 'gha', name: page.name || page.title || new URL(url).pathname.split('/').at(-1), nameVerified: true, officialUrl: url, rateStatus: 'needs_booking_adapter' };
+  return { id: `gha:${page._info.id}`, code: String(page._info.id), group: 'gha', name: page.name || page.title || new URL(url).pathname.split('/').at(-1), nameVerified: true, officialUrl: url, rateStatus: 'unverified' };
 }
 export function rateUrl(hotel, arrival, departure) {
   const code = encodeURIComponent(hotel.code);
@@ -70,4 +70,3 @@ export function datesPresent(text, arrival, departure) {
   };
   return has(arrival) && has(departure);
 }
-
