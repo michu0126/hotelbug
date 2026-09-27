@@ -9,7 +9,7 @@
 | 阶段 | 范围 | 当前状态/验收 |
 | --- | --- | --- |
 | 0 | 架构、模型、队列、Provider 路线与迁移设计 | 已完成设计；旧版基线测试、构建已通过；本机无 Docker 引擎 |
-| 1 | FastAPI / PostgreSQL / Redis / Alembic / Worker / Scheduler / 六服务 Compose | 本地22项离线测试、Ruff检查、Vue构建、迁移SQL生成通过；真实PG/Redis与六容器启动待CI验证 |
+| 1 | FastAPI / PostgreSQL / Redis / Alembic / Worker / Scheduler / 六服务 Compose | 完成：本地22项测试；CI离线22项及真实PG/Redis22项、迁移往返、六容器健康启动全部通过 |
 | 2 | 只实现 Marriott，搜索/详情/房价/历史/日历 | 待开始；先验证官网有效日期搜索流程 |
 | 3 | 中位数基线、评分、历史低价、二次确认、通知 | 待开始 |
 | 4 | Vue 完整业务 Dashboard / 搜索 / 日历 / 趋势 / 配置 | 待开始；Phase 1 仅提供真实基础状态页 |
@@ -123,7 +123,17 @@ amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 
 研究细节保存 docs/providers；证据中的动态 Cookie/Authorization不保存。旧测试结果仅代表2026-09-27开发机，不代表NAS当前出口。
 
-## 参考
+## Phase 1 验收记录（2026-09-28）
+
+- 本地 Python 3.14：22项离线fixture测试、Ruff检查/格式检查通过；Vue生产构建通过。
+- CI Python 3.12：离线fixture测试、真实PostgreSQL16/Redis7集成测试通过。
+- Alembic upgrade → check → downgrade → upgrade 往返成功，模型与迁移一致。
+- Compose六服务全部启动并健康，API readiness、dashboard、provider状态请求成功。
+- 验证运行：https://github.com/michu0126/hotelbug/actions/runs/36334647062
+- 测试不访问酒店官网；合成fixture只在测试使用，不进入生产镜像的数据或UI。
+- 尚未完成项明确保留：Marriott实采、Watchlist任务生成、日历/趋势业务UI、异常分析/复核/通知，不能把Phase1视为最终采价产品。
+
+### 技术资料
 
 - https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html
 - https://alembic.sqlalchemy.org/en/latest/cookbook.html#using-asyncio-with-alembic

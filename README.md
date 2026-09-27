@@ -135,5 +135,5 @@ docker compose up -d
 
 ## 阶段验收
 
-Phase 0 已提交计划。Phase 1 本地离线测试、前端构建已执行；真实PostgreSQL/Redis、迁移往返、六容器启动以本次GitHub Actions结果为准。
-流水线通过全部验证后才发布阶段镜像。完整进度在 IMPLEMENTATION_PLAN.md 更新。
+Phase 0 已提交计划。Phase 1 本地22项测试、前端构建，以及CI Python3.12离线/真实PostgreSQL与Redis测试、迁移往返、六容器健康启动均通过。
+[查看验收流水线](https://github.com/michu0126/hotelbug/actions/runs/36334647062)。完整进度在 IMPLEMENTATION_PLAN.md 更新。
