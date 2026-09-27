@@ -1,0 +1,236 @@
+fragment PhoenixBookDTTResponseStatusFragment on ResponseStatus {
+  httpStatus
+  code
+  errors {
+    code
+    message
+    devMessage
+    __typename
+  }
+  warnings {
+    code
+    message
+    devMessage
+    __typename
+  }
+  __typename
+}
+
+fragment PhoenixBookDTTAmountFragment on MonetaryAmount {
+  amount
+  currency
+  decimalPoint
+  __typename
+}
+
+fragment PhoenixBookDTTCategoryFragment on Lookup {
+  code
+  description
+  label
+  __typename
+}
+
+query PhoenixBookDTTSearchProductsByProperty($search: ProductByPropertySearchInput!, $offset: Int, $limit: Int) {
+  commerce {
+    product {
+      searchProductsByProperty(search: $search, offset: $offset, limit: $limit) @contentError(options: {channel: "web", overrides: [{codesToReplace: ["fallback"], replaceWithCode: "WEB-BOOK-GEN001"}]}) {
+        ... on ProductSearchByPropertyConnection {
+          resultsCollectionId
+          edges {
+            node {
+              ... on HotelRoom {
+                availabilityAttributes {
+                  productRateCategory {
+                    typeCode
+                    value
+                    __typename
+                  }
+                  isNearSellout
+                  __typename
+                }
+                rates {
+                  name
+                  description
+                  rateModes {
+                    ... on HotelRoomRateModesCashAndPoints {
+                      cashAndPointsPerUnit {
+                        points
+                        pointsSaved
+                        amount {
+                          ...PhoenixBookDTTAmountFragment
+                          __typename
+                        }
+                        __typename
+                      }
+                      __typename
+                    }
+                    ... on HotelRoomRateModesCash {
+                      averageNightlyRatePerUnit {
+                        amount {
+                          ...PhoenixBookDTTAmountFragment
+                          __typename
+                        }
+                        __typename
+                      }
+                      __typename
+                    }
+                    ... on HotelRoomRateModesPoints {
+                      pointsPerUnit {
+                        points
+                        pointsSaved
+                        freeNights
+                        __typename
+                      }
+                      __typename
+                    }
+                    ... on HotelRoomRateModesPointsPlusCashUpgrade {
+                      pointsPlusCashUpgradePerUnit {
+                        amount {
+                          ...PhoenixBookDTTAmountFragment
+                          __typename
+                        }
+                        freeNights
+                        points
+                        pointsSaved
+                        __typename
+                      }
+                      __typename
+                    }
+                    __typename
+                  }
+                  __typename
+                }
+                basicInformation {
+                  ratePlan {
+                    ratePlanCode
+                    ratePlanType
+                    marketCode
+                    qualifiedRateRestriction {
+                      guestAltCustIdPresentedInd
+                      guestAuthorizedInd
+                      rateRestrictedInd
+                      restrictedRateType
+                      rrvServiceAvailableInd
+                      __typename
+                    }
+                    __typename
+                  }
+                  freeCancellationUntil
+                  type
+                  parentRoomType
+                  name
+                  description
+                  isMembersOnly
+                  isRepresentativeRoom
+                  isHousingProtected
+                  actualRoomsAvailable
+                  depositRequired
+                  roomsAvailable
+                  roomsRequested
+                  sourceOfRate
+                  inventoryTypeNames {
+                    channelDescriptions {
+                      text
+                      type
+                      __typename
+                    }
+                    __typename
+                  }
+                  __typename
+                }
+                roomAttributes {
+                  id
+                  attributes {
+                    id
+                    description
+                    groupID
+                    category {
+                      ...PhoenixBookDTTCategoryFragment
+                      __typename
+                    }
+                    accommodationCategory {
+                      code
+                      description
+                      __typename
+                    }
+                    isRoomAttribute
+                    positionInCategory
+                    isInInventoryTypeName
+                    __typename
+                  }
+                  __typename
+                }
+                totalPricing {
+                  quantity
+                  rateModes {
+                    grandTotal {
+                      amount {
+                        ...PhoenixBookDTTAmountFragment
+                        __typename
+                      }
+                      __typename
+                    }
+                    subtotalPerQuantity {
+                      amount {
+                        ...PhoenixBookDTTAmountFragment
+                        __typename
+                      }
+                      __typename
+                    }
+                    totalMandatoryFeesPerQuantity {
+                      amount {
+                        ...PhoenixBookDTTAmountFragment
+                        __typename
+                      }
+                      __typename
+                    }
+                    __typename
+                  }
+                  __typename
+                }
+                id
+                roomDetails {
+                  roomSize {
+                    squareFeet
+                    squareMeters
+                    __typename
+                  }
+                  maximumNumberParticipant
+                  __typename
+                }
+                __typename
+              }
+              id
+              __typename
+            }
+            __typename
+          }
+          total
+          attributeDefinitions {
+            categoryClass
+            categoryCode
+            categoryName {
+              type
+              text
+              __typename
+            }
+            code
+            isRoomAttribute
+            positionInCategory
+            names {
+              text
+              type
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        ...PhoenixBookDTTResponseStatusFragment
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

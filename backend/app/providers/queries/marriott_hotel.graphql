@@ -1,0 +1,117 @@
+fragment PhoenixBookDTTResponseStatusFragment on ResponseStatus {
+  httpStatus
+  code
+  errors {
+    code
+    message
+    devMessage
+    __typename
+  }
+  warnings {
+    code
+    message
+    devMessage
+    __typename
+  }
+  __typename
+}
+
+query PhoenixBookDTTHotelHeaderData($propertyId: ID!) @edgeCachedQuery(desiredMaxAge: 10800) {
+  catalog {
+    propertyById(id: $propertyId) @contentError(options: {channel: "web", overrides: [{codesToReplace: ["fallback"], replaceWithCode: "WEB-BOOK-GEN001"}]}) {
+      ... on Hotel {
+        id
+        basicInformation {
+          latitude
+          longitude
+          name
+          currency
+          brand {
+            id
+            __typename
+          }
+          __typename
+        }
+        reviews {
+          numberOfReviews {
+            count
+            description
+            __typename
+          }
+          stars {
+            count
+            description
+            __typename
+          }
+          __typename
+        }
+        contactInformation {
+          contactNumbers {
+            phoneNumber {
+              original
+              __typename
+            }
+            type {
+              description
+              code
+              __typename
+            }
+            __typename
+          }
+          address {
+            line1
+            line2
+            line3
+            city
+            stateProvince {
+              description
+              __typename
+            }
+            country {
+              description
+              code
+              __typename
+            }
+            postalCode
+            __typename
+          }
+          __typename
+        }
+        seoNickname
+        media {
+          primaryImage {
+            edges {
+              node {
+                imageUrls {
+                  wideHorizontal
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          hotelLogo {
+            edges {
+              node {
+                alternateDescription
+                imageSrc
+                isPrimary
+                defaultImage
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      ...PhoenixBookDTTResponseStatusFragment
+      __typename
+    }
+    __typename
+  }
+}
