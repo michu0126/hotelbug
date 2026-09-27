@@ -1,10 +1,15 @@
 # RateDrop 全球酒店官网采集
 
+**归档说明：**本文件描述旧 Node/SQLite 版本。旧版 Compose 现固定使用
+`michu0126/hotelbug:sha-f34ff15`；`latest` 已改为新版六服务前端镜像。
+恢复旧版需使用 `docker/compose.legacy.yml` 和原项目数据卷；单独拉取 `latest`
+不能启动旧版后台。请勿执行 `docker compose down -v`。
+
 面向万豪、IHG、希尔顿、凯悦和 GHA 的官网酒店目录同步与房价查询。**目前未实现或验证全球全量房价覆盖**。网页仅展示本机实际采集结果。
 
 ## 群晖部署
 
-在 Container Manager 中使用仓库的 docker-compose.yml，无需填写环境变量。Compose 包含网页服务 ratedrop 和后台服务 monitor，共享 hotelbug-data 卷。现有用户需更新 Compose，只有拉取新镜像不会自动新增后台服务。
+如需回退旧版，在 Container Manager 中使用仓库的 `docker/compose.legacy.yml`，并保留原项目名和 `hotelbug-data` 数据卷；不要使用根目录的新 `docker-compose.yml`。旧版 Compose 包含网页服务 ratedrop 和后台服务 monitor，共享该数据卷。单独拉取新版 `latest` 无法升级或运行旧版后台。
 
 ```bash
 docker compose pull
@@ -62,7 +67,7 @@ npm run lint
 npm run build:docker
 ```
 
-推送 main 后 GitHub Actions 构建并发布 GHCR 和 Docker Hub 镜像。群晖采用新版 Compose 后后台持续运行，无需另外配置任务计划。
+旧版镜像已固定为 `sha-f34ff15`；旧版手动构建工作流只发布 `legacy-20260927` 标签，不再覆盖默认 `latest`。旧版群晖 Compose 运行后台服务，无需另外配置任务计划。
 
 ## 原始 Sites 工程说明
 

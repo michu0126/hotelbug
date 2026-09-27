@@ -1,6 +1,6 @@
 services:
   ratedrop:
-    image: michu0126/hotelbug:latest
+    image: michu0126/hotelbug:sha-f34ff15
     container_name: hotelbug
     ports:
       - "8098:3000"
@@ -10,7 +10,7 @@ services:
       - hotelbug-data:/app/data
 
   monitor:
-    image: michu0126/hotelbug:latest
+    image: michu0126/hotelbug:sha-f34ff15
     container_name: hotelbug-monitor
     command: ["node", "scripts/monitor.mjs"]
     restart: unless-stopped
