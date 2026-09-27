@@ -45,6 +45,17 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+/.venv/
+**/__pycache__/
+/.pytest_cache/
+/.ruff_cache/
+*.pyc
+*.egg-info/
+/frontend/node_modules/
+/frontend/dist/
+/backend/.pytest_cache/
+/data/
+/logs/
 /data/rate-history.json
 /data/official-catalog.json
 /data/official-catalog.json.tmp
@@ -52,4 +63,3 @@ next-env.d.ts
 /data/catalog-checkpoint.json.tmp
 /data/monitor.sqlite*
 /data/monitor-status.json*
-

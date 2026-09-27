@@ -1,25 +1,146 @@
-services:
-  ratedrop:
-    image: michu0126/hotelbug:latest
-    container_name: hotelbug
-    ports:
-      - "8098:3000"
-    restart: unless-stopped
-    shm_size: "1gb"
-    volumes:
-      - hotelbug-data:/app/data
+name: hotelbug-v2
 
-  monitor:
-    image: michu0126/hotelbug:latest
-    container_name: hotelbug-monitor
-    command: ["node", "scripts/monitor.mjs"]
+x-backend: &backend
+  image: ${HOTELBUG_API_IMAGE:-michu0126/hotelbug:phase1-api}
+  build:
+    context: .
+    target: api
+  restart: unless-stopped
+  init: true
+  environment: &backend-env
+    DATABASE_URL: postgresql+psycopg://hotelbug:${POSTGRES_PASSWORD:-hotelbug-local}@postgres:5432/hotelbug
+    REDIS_URL: redis://redis:6379/0
+    TZ: ${TZ:-Asia/Shanghai}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-120}
+    PROVIDER_CONCURRENCY: ${PROVIDER_CONCURRENCY:-1}
+    PROVIDER_MIN_INTERVAL_SECONDS: ${PROVIDER_MIN_INTERVAL_SECONDS:-5}
+    MARRIOTT_ENABLED: ${MARRIOTT_ENABLED:-false}
+    MARRIOTT_CONCURRENCY: ${MARRIOTT_CONCURRENCY:-1}
+    MARRIOTT_RATE_LIMIT_SECONDS: ${MARRIOTT_RATE_LIMIT_SECONDS:-5}
+    IHG_ENABLED: ${IHG_ENABLED:-false}
+    IHG_CONCURRENCY: ${IHG_CONCURRENCY:-1}
+    IHG_RATE_LIMIT_SECONDS: ${IHG_RATE_LIMIT_SECONDS:-5}
+    HILTON_ENABLED: ${HILTON_ENABLED:-false}
+    HILTON_CONCURRENCY: ${HILTON_CONCURRENCY:-1}
+    HILTON_RATE_LIMIT_SECONDS: ${HILTON_RATE_LIMIT_SECONDS:-5}
+    HYATT_ENABLED: ${HYATT_ENABLED:-false}
+    HYATT_CONCURRENCY: ${HYATT_CONCURRENCY:-1}
+    HYATT_RATE_LIMIT_SECONDS: ${HYATT_RATE_LIMIT_SECONDS:-5}
+    ACCOR_ENABLED: ${ACCOR_ENABLED:-false}
+    ACCOR_CONCURRENCY: ${ACCOR_CONCURRENCY:-1}
+    ACCOR_RATE_LIMIT_SECONDS: ${ACCOR_RATE_LIMIT_SECONDS:-5}
+    GHA_ENABLED: ${GHA_ENABLED:-false}
+    GHA_CONCURRENCY: ${GHA_CONCURRENCY:-1}
+    GHA_RATE_LIMIT_SECONDS: ${GHA_RATE_LIMIT_SECONDS:-5}
+    SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-10}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    BARK_URL: ${BARK_URL:-}
+    WEBHOOK_URL: ${WEBHOOK_URL:-}
+  volumes:
+    - app-data:/data
+    - app-logs:/logs
+  logging: &logs
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
-    init: true
-    shm_size: "1gb"
-    healthcheck:
-      disable: true
+    environment:
+      POSTGRES_DB: hotelbug
+      POSTGRES_USER: hotelbug
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hotelbug-local}
+      PGDATA: /data/postgres
     volumes:
-      - hotelbug-data:/app/data
+      - postgres-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hotelbug -d hotelbug"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logs
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logs
+
+  hotel-monitor-api:
+    <<: *backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready',timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  hotel-monitor-worker:
+    <<: *backend
+    command: ["python", "-m", "app.crawler.worker"]
+    depends_on:
+      hotel-monitor-api:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "worker"]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  hotel-monitor-scheduler:
+    <<: *backend
+    command: ["python", "-m", "app.scheduler.main"]
+    depends_on:
+      hotel-monitor-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.core.healthcheck", "scheduler"]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  hotel-monitor-frontend:
+    image: ${HOTELBUG_FRONTEND_IMAGE:-michu0126/hotelbug:phase1-frontend}
+    build:
+      context: .
+      target: frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8098}:8080"
+    depends_on:
+      hotel-monitor-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: *logs
 
 volumes:
-  hotelbug-data:
+  postgres-data:
+  redis-data:
+  app-data:
+  app-logs:

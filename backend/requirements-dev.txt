@@ -1,0 +1,11 @@
+-r requirements.txt
+aiosqlite==0.22.1
+fakeredis==2.38.0
+iniconfig==2.3.0
+lupa==2.8
+pluggy==1.6.0
+Pygments==2.21.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.9
+sortedcontainers==2.4.0

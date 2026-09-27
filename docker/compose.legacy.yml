@@ -1,0 +1,25 @@
+services:
+  ratedrop:
+    image: michu0126/hotelbug:latest
+    container_name: hotelbug
+    ports:
+      - "8098:3000"
+    restart: unless-stopped
+    shm_size: "1gb"
+    volumes:
+      - hotelbug-data:/app/data
+
+  monitor:
+    image: michu0126/hotelbug:latest
+    container_name: hotelbug-monitor
+    command: ["node", "scripts/monitor.mjs"]
+    restart: unless-stopped
+    init: true
+    shm_size: "1gb"
+    healthcheck:
+      disable: true
+    volumes:
+      - hotelbug-data:/app/data
+
+volumes:
+  hotelbug-data:

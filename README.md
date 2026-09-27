@@ -1,192 +1,139 @@
-# RateDrop 全球酒店官网采集
+# Hotel Bug Price Monitor
 
-面向万豪、IHG、希尔顿、凯悦和 GHA 的官网酒店目录同步与房价查询。**目前未实现或验证全球全量房价覆盖**。网页仅展示本机实际采集结果。
+自托管酒店价格情报平台，目标部署环境为群晖/Linux/Docker。当前为 **Phase 1 基础框架**，不是六集团报价已接入的完成版。
 
-## 群晖部署
+## 当前交付与边界
 
-在 Container Manager 中使用仓库的 docker-compose.yml，无需填写环境变量。Compose 包含网页服务 ratedrop 和后台服务 monitor，共享 hotelbug-data 卷。现有用户需更新 Compose，只有拉取新镜像不会自动新增后台服务。
+- Python 3.12+ / FastAPI / SQLAlchemy / Alembic / PostgreSQL / Redis。
+- 六服务 Compose、独立 Scheduler 与 Worker、持久化任务、优先级、去重、租约恢复、独立 Provider 限流。
+- 标准化 Hotel/Rate 数据结构、Decimal 金额、10 张数据库表、追加式历史、报价身份隔离。
+- Vue 3 + Vite 真实基础状态页；无演示报价。
+- **生产 Provider 尚未注册，当前不会自动采集官网报价。Marriott 是下一阶段首个实现目标。**
+- 异常评分/二次验证/通知发送、完整价格日历/趋势/Watchlist UI 属于后续阶段，基础表不等于功能已完成。
+- [实施计划](IMPLEMENTATION_PLAN.md) / [Provider 研究记录](docs/providers/)。
+
+## 旧版用户：不要直接覆盖正在运行的部署
+
+原 Node/SQLite 采集器完整保留，原稳定镜像 `michu0126/hotelbug:latest` 不由新流水线覆盖。
+旧 Compose 在 `docker/compose.legacy.yml`，旧镜像构建定义在 `docker/legacy.Dockerfile`，旧说明在 [LEGACY_README](docs/LEGACY_README.md)。
+旧数据卷不删除、不自动转换。最低价快照不具备严格同房型/Rate Plan 历史，不能直接导入异常基线。
+
+新版使用独立 Compose 项目名 `hotelbug-v2`、独立卷和 `phase1-api` / `phase1-frontend` 镜像标签。
+并行验证时将 WEB_PORT 设为 **8099**，避免占用旧版8098。旧版可以继续运行。
+恢复旧版时沿用原项目名、原卷和原Compose；不要用新项目名挂载空卷误以为数据丢失。
+
+## 新版部署
+
+Intel/AMD x86_64 群晖；当前只发布 amd64，ARM64尚未验证。基础阶段无 Chromium，不运行大量浏览器。
+建议 NAS 至少预留1GB内存，实际消耗以部署监测为准。
+
+```bash
+git clone https://github.com/michu0126/hotelbug.git
+cd hotelbug
+cp .env.example .env
+docker compose up -d
+```
+
+首次部署前编辑 .env：
+- POSTGRES_PASSWORD：改成随机的URL安全字符串（例如32字节随机十六进制）；不要在已有数据库上只改密码变量而不修改数据库角色密码。
+- ADMIN_TOKEN：管理写入认证；留空时写入返回503，只读状态仍可用。
+- WEB_PORT：默认8098；与旧版并行请改8099。
+
+访问 `http://NAS-IP:8098`。只前端端口对宿主开放，PostgreSQL/Redis不映射宿主端口。
+这是内网部署；公网访问需要带认证和TLS的反向代理。没有把登录界面冒充完整权限系统。
+
+Compose 会按依赖健康顺序启动数据库、迁移/API、Worker、Scheduler、前端。
+若尚未拉到阶段镜像，可在仓库中执行 `docker compose up -d --build` 从源码构建。
+
+## 配置
+
+所有部署配置从环境变量读取；API返回不会泄露数据库URL、Token或Cookie。
+默认 TZ=Asia/Shanghai；数据库时间使用UTC。
+`DATABASE_URL` / `REDIS_URL` 在Compose中按服务名生成，独立开发时可以自行配置。
+并发、请求间隔、任务超时、调度周期见 .env.example。每个Provider有独立Redis锁/限流键，默认同一Provider并发1、间隔5秒。
+最大任务重试3次、指数退避+jitter。403/挑战暂停6小时，429至少暂停1小时且不早于Retry-After。
+任务租约超过执行超时60秒；崩溃任务可恢复，重复崩溃达到上限后终止。
+通知变量 TELEGRAM_BOT_TOKEN/CHAT_ID、BARK_URL、WEBHOOK_URL 已预留；**Phase 1 不发送通知**，适配器在Phase3实现。
+
+## 增加酒店 / Provider
+
+API文档 `/docs` 在API容器端口8000可访问；前端只反代/api，常用路由：
+- GET /api/dashboard、/api/providers、/api/jobs
+- GET /api/hotels?q=Shanghai&provider=marriott
+- GET /api/hotels/{id}、/api/hotels/{id}/history?days=30
+- POST /api/hotels（Authorization: Bearer ADMIN_TOKEN）
+- POST /api/jobs（同认证，未注册Provider返回409，不发送猜测请求）
+
+增加适配器必须先完善 docs/providers/<group>.md，再继承 HotelProvider。
+只返回统一Pydantic模型，不向业务层泄漏原始JSON。注册到FACTORIES后才启用任务处理。
+当前研究全部明确标注未知项，禁止把样本或未完成适配器标ONLINE。
+HTTP错误工具在 crawler/http.py；无需浏览器的Provider不得引入浏览器。
+配置、浏览器Session与Raw Fixture必须脱敏；单元测试使用本地fixture，不访问酒店网站。
+
+## 开发与测试
+
+```bash
+cd backend
+python -m venv .venv
+# 激活当前系统的虚拟环境
+pip install -r requirements-dev.txt
+pytest -q
+ruff check app tests alembic
+ruff format --check app tests alembic
+```
+
+依赖版本锁定在 requirements.txt / requirements-dev.txt；前端使用 package-lock.json。
+本地快速测试使用SQLite和fakeredis；CI还必须使用真实PostgreSQL和Redis，不能拿模拟测试替代。
+集成测试会清空测试库，只允许名称以 `_test` 结尾的数据库及Redis DB15，严禁指向生产库。
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+## 数据库迁移
+
+API启动自动执行Alembic升级，Worker/Scheduler不运行迁移。
+修改模型时先生成并审查版本化迁移，不使用create_all代替生产迁移。
+
+```bash
+docker compose exec hotel-monitor-api alembic current
+docker compose exec hotel-monitor-api alembic upgrade head
+```
+
+## 更新
 
 ```bash
 docker compose pull
 docker compose up -d
+docker compose logs --tail=100 hotel-monitor-worker hotel-monitor-scheduler
 ```
 
-打开 http://群晖IP:8098，在页面底部“监控设置”填写 Telegram Token、Chat ID 和监测参数，保存后可发送测试消息。时区内置 Asia/Shanghai，容器内部端口仍为3000。配置持久化在 /app/data/settings.json，后台下一批任务生效，无需重启。Token 不会通过读取接口回传；留空保留原值，清空 Chat ID 可停止通知。此页面无登录保护，请仅用于可信内网或通过带认证的反向代理访问。
+切勿执行 `docker compose down -v`。升级前备份，破坏性迁移需要人工确认。
+新版框架镜像阶段标签与旧latest分开，未完成Provider前不自动切换旧版用户。
 
-当前镜像为 linux/amd64，适用于 x86_64 群晖；未发布 ARM 镜像。建议为浏览器预留至少 1 GB 内存。
+## 备份与恢复
 
-## 实际行为与覆盖
-
-- 从集团官网站点地图持续同步酒店，按酒店代码去重；GHA 还验证详情页类型。
-- 酒店名录自动导入 SQLite 查询队列。五个集团均由后台自动尝试查询，万豪、IHG、希尔顿、凯悦仍可能遇到日期适配或访问拒绝，尚未验证稳定报价覆盖。
-- GHA 通过酒店官网详情页的预订链接进入日期报价页，只解析浏览器实际显示的日期、成人数、币种和非会员未税起价，不直接调用报价接口。已加入真实酒店启动样例；其他 GHA 酒店仍需逐步验证，不支持的预订流程会记录错误。
-- 默认目标为未来365天，每批最多30次查询。每个酒店轮流处理入住日期，后台每批结束后等待300秒继续；这不代表每天能够查完所有酒店的365天。
-- 只有页面本身确认入住、离店日期，且明确显示币种和每晚价格，才保存报价。不仅依赖URL参数。
-- 同酒店、同日期、同币种的最低可见每晚价下降35%以上时，将降价线索写入持久化推送队列。它不是同房型、同税费或同取消政策的保证，也不是已确认的错误价。
-- 403、429或人机验证会暂停该集团6小时。目录普通连接失败5分钟后再试，报价普通页面识别失败1小时后再试。失败不会记录为零元。
-- 网页展示目录数量、待同步文件数、实际检查次数、近24小时有效报价、错误与推送状态；不含演示酒店价格。
-- 一次目录遍历结束仅表示站点地图已读取，无法证明官网未遗漏酒店或尚未营业的酒店已可预订。
-
-2026-09-27 验证：GHA 的 NH Collection Dubai Ibn Battuta 官网预订页显示指定日期真实房价；页面采集器已纳入持久化自动队列。其他四集团首轮报价示例未通过：三个集团返回403，万豪未确认所请求日期。不能据此宣称已完成全量价格接入。GHA 非会员未税起价与其他采价口径分别建立基准，不跨口径比较。
-
-## 配置与手动命令
-
-以下参数均有内置默认值；除数据目录外可在 UI 修改。已保存的 UI 配置优先于旧环境变量。升级时保留原项目名称和数据卷，不要执行 docker compose down -v。
-
-| 环境变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| SCAN_DAYS | 365 | 目标日期范围，1–365 |
-| SCAN_BATCH_SIZE | 30 | 每个批次最多查询次数 |
-| CATALOG_PAGES_PER_GROUP | 25 | 每集团每批目录页面数 |
-| MONITOR_INTERVAL_SECONDS | 300 | 两批之间的间隔 |
-| SCRAPER_DELAY_MS | 5000 | 单次房价访问间隔，至少1500毫秒 |
-| DROP_THRESHOLD | 35 | 降价提醒百分比 |
-| SCRAPER_DATA_DIR | /app/data | 共享数据目录 |
+在NAS的shell中将数据库导出到用户选择的备份目录，并同时安全备份.env：
 
 ```bash
-# 单独续跑目录
-docker exec hotelbug node scripts/sync-official-catalog.mjs
-# 单独执行一个房价批次
-docker exec hotelbug npm run scrape:rates
-# 查看后台状态
-docker compose logs --tail=100 monitor
+docker compose exec -T postgres pg_dump -U hotelbug -d hotelbug -Fc > hotelbug.dump
 ```
 
-目录检查点、酒店查询进度、报价与推送队列均持久化在共享卷。旧版 rate-history.json 保留但不导入为可信报价，新版会重新建立基准。Telegram未配置时降价消息保留待发送；发送失败最多重试10次，网络响应丢失时存在重复发送可能。
-
-## 验证与发布
+恢复到**全新、空的数据库卷**，先仅启动postgres，数据库存在后导入，再启动其他服务：
 
 ```bash
-node --test scripts/monitor.test.mjs
-npm run lint
-npm run build:docker
+docker compose up -d postgres
+docker compose exec -T postgres pg_restore -U hotelbug -d hotelbug --no-owner < hotelbug.dump
+docker compose up -d
 ```
 
-推送 main 后 GitHub Actions 构建并发布 GHCR 和 Docker Hub 镜像。群晖采用新版 Compose 后后台持续运行，无需另外配置任务计划。
+不要对有数据的现有库直接恢复，避免重复或覆盖。Redis是队列投影，可以由PG到期任务恢复；通知与历史事实在PG中。
+/data、/logs使用命名卷；业务结构化日志输出stdout，Docker每容器10MB×3轮转。
+日志禁止记录Authorization、完整Cookie、密码和会话；默认不持久化原始响应。
 
-## 原始 Sites 工程说明
+## 阶段验收
 
-A clean full-stack starter running on [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and Drizzle support.
-
-## Prerequisites
-
-- Node.js `>=22.13.0`
-- Portable: Windows, macOS, or Linux; no Bash required
-- Managed Linux: managed Linux runtime with Bash, `flock`, `curl`, `sha256sum`, and GNU `timeout`
-- Git is required only for publishing
-
-## Sites Lifecycle
-
-The Sites initializer copies the shared starter and selects managed-linux only when `SITES_MANAGED_LINUX_CONTAINER=1`; otherwise it selects portable. It saves the selection only in ignored `.sites-runtime/execution-profile.json`. Both profiles copy/configure first, then use the plugin's separate `install-dependencies.mjs` step to measure installation independently. Edit source under `app/` and follow the Sites skill for installation, preview, builds, and publishing.
-
-Whenever reopening or moving a checkout, run `node <plugin-root>/scripts/configure-execution-profile.mjs` before project commands. Profile changes do not alter tracked source or require reinstalling otherwise-valid dependencies; restart an existing preview to use the new selection. Do not commit or upload `.sites-runtime/`.
-
-This starter does not use `wrangler.jsonc`.
-
-`install:ci` runs `npm ci` once against the shared lockfile, disables parent-workspace discovery, and includes required dev/optional dependencies despite production/omit settings. Sharp defaults to prebuilt binaries unless explicitly configured otherwise. Do not overlap installers.
-
-- **Portable:** Preserve host HOME, npm cache, registry, proxy, temporary paths, retry/concurrency settings, and lifecycle-script policy. Use `--prefer-offline --no-audit --no-fund`.
-- **Managed Linux:** Use the existing project-local HOME/cache/tmp setup and Linux install lock, tarball preflight, and timeout. Restore the image-seeded npm cache only when its lockfile hash matches; retain network fallback. Builds keep their existing timeout. These helpers are not invoked by the portable profile.
-
-`scripts/sites-env.mjs` preserves the caller's HOME, npm cache, proxy, XDG, and temporary-directory configuration while defaulting Wrangler and Miniflare state to the checkout. If npm reports an unwritable cache, select a writable path with `npm_config_cache` for that install. The `dev` and `start` scripts also keep Wrangler logs inside the checkout. Generated `.sites-runtime/` and `.wrangler/` directories are disposable and ignored by Git.
-
-On portable, `npm run dev` uses `vinext dev` with HMR, starting at port 5173. Vinext records the running server in ignored `.vinext/` state, rejects an ordinary duplicate launch, and recovers stale state after a stopped process; exactly simultaneous starts can race. Pass `--port <port>` or `--hostname <host>` after `npm run dev --` when needed; keep portable previews on loopback.
-
-On managed Linux, use `sites-preview start` only for requested browser QA. The project's dev script runs Vite and accepts the supervisor's `--host 0.0.0.0 --port 4173 --strictPort` arguments. The internal browser uses `http://terminal.local:4173/`; it is not a user-facing URL. The supervisor owns the preview lifecycle. The ignored local profile survives the supervisor's cleared process environment.
-
-The portable profile simulates ChatGPT sign-in only for loopback development requests. Visit `/signin-with-chatgpt?return_to=/` to sign in as `local_seedy` (`seedy@sites.test`, display name `Seedy`) and `/signout-with-chatgpt?return_to=/` to sign out. The development cookie preserves that identity across server restarts. Mock auth is disabled in the managed-linux profile and is not included in production builds; hosted authentication remains dispatch-owned.
-
-The Worker uses `vinext/server/fetch-handler`, including Vinext's config-aware image handling. After building, `npm start` runs that Worker locally through Wrangler on `127.0.0.1`, sharing `.wrangler/state` with dev preview and local D1 migrations; it does not deploy the site or simulate sign-in. Use the URL printed by the server. Pass `npm start -- --port <port>` to select a different built-preview port.
-
-Local previews use Miniflare's placeholder `Request.cf` metadata without a network lookup. Set `CLOUDFLARE_CF_FETCH_ENABLED=true` to opt into fetching preview metadata; this setting does not change hosted request metadata.
-
-Local tool usage metrics are disabled by default. Set `WRANGLER_SEND_METRICS=true` to opt in.
-
-## Included Shape
-
-- edit site code under `app/`
-- `app/chatgpt-auth.ts` provides optional dispatch-owned ChatGPT sign-in helpers
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/index.ts` reads the D1 binding from the Cloudflare Worker environment
-- `db/schema.ts` starts intentionally empty
-- `@cloudflare/workers-types` provides Worker types; `cloudflare-env.d.ts` declares optional `DB`/`BUCKET` bindings—update these declarations if binding names change
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Use it as the durable user key; use email and name for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive `oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty `name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by `oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use the returned `userId` as the stable user key for user-owned records; do not use email as a durable identifier.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send anonymous visitors through Sign in with ChatGPT.
-- In a Server Component, start sign-in with `<a href={chatGPTSignInPath(returnTo)} target="_top">`. The auth helper module is server-only; do not import it into a Client Component.
-- Do not use `fetch`, XHR, a client-side router, or a framework link that can prefetch the sign-in route. SIWC must start as a top-level navigation.
-- Never request the AuthAPI authorization endpoint directly. The dispatch-owned `/signin-with-chatgpt` route must start the SIWC flow.
-- Use `chatGPTSignOutPath(returnTo)` for browser sign-out links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the OAuth cookies, and identity header injection. Do not implement app routes for those reserved paths. Routes that do not import and call the helper remain anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the Sites hosting platform's access policy controls for workspace-wide restrictions, or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Local D1 migrations
-
-For a D1-backed local preview, generate SQL with `npm run db:generate`. Build once through the Sites skill's build entrypoint (or `npm run build` for standalone use) to generate `dist/server/wrangler.json`, rebuilding if bindings change. From the project root, apply each pending migration in order:
-
-```sh
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_example.sql
-```
-
-Replace the filename with the pending migration and `DB` with your D1 binding name if different. Use `.wrangler/state`, not `.wrangler/state/v3`; Wrangler adds the versioned directories. Do not replay migrations already applied locally. This updates only the preview database; publishing applies production migrations separately.
-
-## Diagnostic Commands
-
-- `npm run install:ci`: perform the one locked dependency install
-- `npm run dev`: start the Vite/Vinext development server
-- `npm run build`: build the deployable Sites artifact
-- `npm run start`: preview the built Worker locally with D1/R2 support
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-When using the Sites plugin, follow its skill instructions for installation, builds, and publishing. These npm commands remain available for standalone use.
-
-The portable build runs Vinext directly without a host `timeout` command. The managed-linux build uses `scripts/build-verified.sh` and its existing `SITES_BUILD_TIMEOUT` setting.
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Phase 0 已提交计划。Phase 1 本地离线测试、前端构建已执行；真实PostgreSQL/Redis、迁移往返、六容器启动以本次GitHub Actions结果为准。
+流水线通过全部验证后才发布阶段镜像。完整进度在 IMPLEMENTATION_PLAN.md 更新。
