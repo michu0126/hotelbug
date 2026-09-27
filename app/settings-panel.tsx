@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
+type SettingsResponse={tokenConfigured:boolean;TELEGRAM_CHAT_ID:string;SCAN_DAYS:number;SCAN_BATCH_SIZE:number;CATALOG_PAGES_PER_GROUP:number;MONITOR_INTERVAL_SECONDS:number;SCRAPER_DELAY_MS:number;DROP_THRESHOLD:number};
 const fields:[string,string,number,number][]=[['SCAN_DAYS','监测日期范围（天）',1,365],['DROP_THRESHOLD','降价阈值（%）',5,95],['SCAN_BATCH_SIZE','每批报价查询数',1,500],['CATALOG_PAGES_PER_GROUP','每集团每批目录页数',1,1000],['MONITOR_INTERVAL_SECONDS','批次间隔（秒）',30,86400],['SCRAPER_DELAY_MS','报价请求间隔（毫秒）',1500,60000]];
 export default function SettingsPanel(){
   const [values,setValues]=useState<Record<string,string|number>>({}),[configured,setConfigured]=useState(false),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
-  useEffect(()=>{fetch('/api/settings').then(async r=>{if(!r.ok)throw new Error();return r.json();}).then(({tokenConfigured,...rest})=>{setConfigured(tokenConfigured);setValues({...rest,TELEGRAM_BOT_TOKEN:''});setReady(true);}).catch(()=>setMessage('读取配置失败，请刷新重试'));},[]);
+  useEffect(()=>{fetch('/api/settings').then(async r=>{if(!r.ok)throw new Error();return await r.json() as SettingsResponse;}).then(({tokenConfigured,...rest})=>{setConfigured(tokenConfigured);setValues({...rest,TELEGRAM_BOT_TOKEN:''});setReady(true);}).catch(()=>setMessage('读取配置失败，请刷新重试'));},[]);
   async function action(test=false){setBusy(true);setMessage('');try{
     const r=await fetch(test?'/api/telegram/test':'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(test?{}:values)});
-    const body=await r.json();if(!r.ok)throw new Error(body.error||'操作失败');
+    const body=await r.json() as SettingsResponse & {error?:string};if(!r.ok)throw new Error(body.error||'操作失败');
     if(!test){const {tokenConfigured,...rest}=body;setConfigured(tokenConfigured);setValues({...rest,TELEGRAM_BOT_TOKEN:''});}
     setMessage(test?'测试消息已发送，请查看 Telegram':'已保存，后台下一批任务生效，无需重启');
   }catch(e){setMessage((e as Error).message);}finally{setBusy(false);}}
