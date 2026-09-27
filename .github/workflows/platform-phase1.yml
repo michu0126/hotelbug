@@ -60,9 +60,9 @@ jobs:
         run: pytest -q
       - name: Build and boot all six services
         run: |
-          docker compose config --quiet
-          docker compose build --pull
-          docker compose up -d --no-build --pull never --wait --wait-timeout 180
+          docker compose -f docker-compose.yml -f docker/compose.build.yml config --quiet
+          docker compose -f docker-compose.yml -f docker/compose.build.yml build --pull
+          docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --no-build --pull never --wait --wait-timeout 180
           curl --fail http://localhost:8098/api/health/ready
           curl --fail http://localhost:8098/api/dashboard
           curl --fail http://localhost:8098/api/providers

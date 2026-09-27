@@ -2,9 +2,6 @@ name: hotelbug
 
 x-backend: &backend
   image: ${HOTELBUG_API_IMAGE:-michu0126/hotelbug:api-latest}
-  build:
-    context: .
-    target: api
   restart: unless-stopped
   init: true
   environment: &backend-env
@@ -123,9 +120,6 @@ services:
 
   hotel-monitor-frontend:
     image: ${HOTELBUG_FRONTEND_IMAGE:-michu0126/hotelbug:latest}
-    build:
-      context: .
-      target: frontend
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8098}:8080"

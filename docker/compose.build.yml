@@ -1,0 +1,11 @@
+services:
+  hotel-monitor-api: &backend-build
+    build:
+      context: .
+      target: api
+  hotel-monitor-worker: *backend-build
+  hotel-monitor-scheduler: *backend-build
+  hotel-monitor-frontend:
+    build:
+      context: .
+      target: frontend

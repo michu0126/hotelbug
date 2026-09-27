@@ -43,8 +43,11 @@ docker compose up -d
 访问 `http://NAS-IP:8098`。只前端端口对宿主开放，PostgreSQL/Redis不映射宿主端口。
 这是内网部署；公网访问需要带认证和TLS的反向代理。没有把登录界面冒充完整权限系统。
 
-Compose 会按依赖健康顺序启动数据库、迁移/API、Worker、Scheduler、前端。
-若尚未拉到镜像，可在仓库中执行 `docker compose up -d --build` 从源码构建。
+Compose 会按依赖健康顺序启动数据库、迁移/API、Worker、Scheduler、前端。根目录 Compose 只使用已发布镜像，可以直接粘贴到群晖 Container Manager；源码构建需在完整仓库目录中额外使用 `docker/compose.build.yml`：
+
+```bash
+docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --build
+```
 
 ## 配置
 
