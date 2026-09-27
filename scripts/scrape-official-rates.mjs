@@ -1,4 +1,6 @@
 import { chromium } from 'playwright-core';
+import { applySettings } from './settings.mjs';
+await applySettings();
 import { access, readFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { rateUrl, nightlyPrices, datesPresent } from './official-adapters.mjs';
@@ -112,4 +114,3 @@ try {
   db.close();
 }
 console.log(JSON.stringify({queries:results.length,windowDays:days}));
-

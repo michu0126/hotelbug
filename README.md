@@ -4,14 +4,16 @@
 
 ## 群晖部署
 
-在 Container Manager 中使用仓库的 docker-compose.yml，并配置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。Compose 包含网页服务 ratedrop 和后台服务 monitor，共享 hotelbug-data 卷。现有用户需更新 Compose，只有拉取新镜像不会自动新增后台服务。
+在 Container Manager 中使用仓库的 docker-compose.yml，无需填写环境变量。Compose 包含网页服务 ratedrop 和后台服务 monitor，共享 hotelbug-data 卷。现有用户需更新 Compose，只有拉取新镜像不会自动新增后台服务。
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-打开 http://群晖IP:3000。当前镜像为 linux/amd64，适用于 x86_64 群晖；未发布 ARM 镜像。建议为浏览器预留至少 1 GB 内存。
+打开 http://群晖IP:8098，在页面底部“监控设置”填写 Telegram Token、Chat ID 和监测参数，保存后可发送测试消息。时区内置 Asia/Shanghai，容器内部端口仍为3000。配置持久化在 /app/data/settings.json，后台下一批任务生效，无需重启。Token 不会通过读取接口回传；留空保留原值，清空 Chat ID 可停止通知。此页面无登录保护，请仅用于可信内网或通过带认证的反向代理访问。
+
+当前镜像为 linux/amd64，适用于 x86_64 群晖；未发布 ARM 镜像。建议为浏览器预留至少 1 GB 内存。
 
 ## 实际行为与覆盖
 
@@ -27,6 +29,8 @@ docker compose up -d
 2026-09-27 本机实测：万豪目录10,257条、IHG目录7,146条；希尔顿和GHA仍在分批遍历。四个房价示例本次均未通过检查：三个集团返回403，万豪未确认所请求日期。不能据此宣称已完成全量价格接入。
 
 ## 配置与手动命令
+
+以下参数均有内置默认值；除数据目录外可在 UI 修改。已保存的 UI 配置优先于旧环境变量。升级时保留原项目名称和数据卷，不要执行 docker compose down -v。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -185,4 +189,3 @@ The portable build runs Vinext directly without a host `timeout` command. The ma
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
-

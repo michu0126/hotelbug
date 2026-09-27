@@ -1,4 +1,6 @@
 import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
+import { applySettings } from './settings.mjs';
+await applySettings();
 import path from 'node:path';
 import { sources, locations, acceptSitemap, hotelFromUrl, ghaCandidate, ghaFromHtml } from './official-adapters.mjs';
 import { openStore, acquireLease, importHotels, dataDir } from './monitor-store.mjs';
@@ -70,4 +72,3 @@ try {
   await persist();
   console.log('已保存 '+hotels.size+' 家官网酒店；名录不代表房价已验证。');
 } finally {release();db.close();}
-

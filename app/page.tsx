@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import SettingsPanel from "./settings-panel";
 import { Radar, RefreshCw, Globe2, CalendarDays, Activity, BellRing, ExternalLink, Search } from "lucide-react";
 
 const names: Record<string,string>={marriott:"万豪",ihg:"IHG",hilton:"希尔顿",hyatt:"凯悦",gha:"GHA"};
@@ -40,6 +41,7 @@ export default function Home(){
       <section className="rounded-2xl border bg-white p-5"><h2 className="mb-2 text-lg font-bold">降价线索与推送</h2><p className="mb-4 text-sm text-slate-500">与同酒店、同入住日、同币种的上次最低可见每晚价比较，阈值 {status?.threshold||35}%。不同房型或规则可能造成价格变化。</p><Quotes rows={monitor?.alerts||[]} alerts/></section>
       <section className="rounded-2xl border bg-white p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-bold">官网酒店库 <span className="text-sm font-normal text-slate-500">{total.toLocaleString()} 条</span></h2><div className="flex flex-wrap gap-2"><select aria-label="酒店集团" value={group} onChange={e=>{setGroup(e.target.value);setPage(0);}} className="rounded-lg border p-2"><option value="">全部集团</option>{Object.entries(names).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select><label className="flex items-center gap-2 rounded-lg border px-3"><Search className="size-4"/><input aria-label="搜索酒店" placeholder="酒店名称或代码" value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}} className="min-w-0 py-2 outline-none"/></label></div></div><p className="mb-3 text-xs text-slate-500">部分名称由官网链接生成；点击官网可核对酒店正式名称。</p><div className="divide-y">{hotels.map(h=><a key={h.id} href={h.officialUrl} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-3 py-3 text-sm hover:text-blue-700"><span><span className="mr-3 text-slate-400">{names[h.group]}</span>{h.name||h.nameFromUrl||h.id}<span className="ml-3 text-xs text-slate-400">{h.id}</span></span><ExternalLink className="size-4 shrink-0"/></a>)}</div>{!hotels.length&&<p className="py-8 text-center text-slate-500">暂无匹配酒店，目录同步后显示。</p>}<div className="mt-4 flex justify-between"><button className="rounded-lg border px-4 py-2 disabled:opacity-30" disabled={page===0} onClick={()=>setPage(page-1)}>上一页</button><span className="p-2 text-sm">第 {page+1} 页</span><button className="rounded-lg border px-4 py-2 disabled:opacity-30" disabled={(page+1)*50>=total} onClick={()=>setPage(page+1)}>下一页</button></div></section>
       {!!monitor?.errors.length&&<section className="rounded-2xl border bg-white p-5"><h2 className="mb-3 font-bold">最近查询问题</h2>{monitor.errors.map(e=><p key={e.id} className="py-1 text-sm text-slate-600">{e.id}：{e.error}</p>)}</section>}
+      <SettingsPanel/>
       <footer className="text-xs text-slate-500">采集状态更新：{monitor?.updatedAt?time(monitor.updatedAt):"尚无记录"} · 所有统计来自本机采集，无演示房价。</footer>
     </div>
   </main>;
@@ -48,4 +50,3 @@ function Quotes({rows,alerts=false}:{rows:Quote[];alerts?:boolean}){
   if(!rows.length)return <p className="rounded-xl bg-slate-50 py-10 text-center text-sm text-slate-500">{alerts?"暂无降价记录；需要同一入住日的前后两次有效报价。":"尚无通过日期核验的报价。可在下方查看查询问题。"}</p>;
   return <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-500"><tr><th className="pb-3">酒店</th><th>入住日期</th><th>每晚报价</th><th>{alerts?"推送状态":"采集时间"}</th><th>官网</th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.hotel+r.checkIn+i} className="border-t"><td className="max-w-sm py-4 pr-3">{r.hotel}</td><td className="whitespace-nowrap pr-3">{r.checkIn}</td><td className="whitespace-nowrap pr-3 font-semibold">{r.currency} {r.price.toLocaleString()}{alerts&&<span className="ml-2 text-rose-600">-{r.drop}%</span>}</td><td className="pr-3 text-slate-500">{alerts?(r.telegramSent?"已发送":"待发送 / 重试"):time(r.checkedAt)}</td><td><a href={r.url} target="_blank" rel="noreferrer" className="text-blue-600">核对</a></td></tr>)}</tbody></table></div>;
 }
-
