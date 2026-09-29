@@ -16,6 +16,7 @@ from app.database.session import get_session
 from app.models.tables import (
     CrawlJob,
     Hotel,
+    NotificationLog,
     PriceAlert,
     PriceHistory,
     ProviderStatus,
@@ -76,7 +77,7 @@ async def dashboard(db: Db):
     midnight = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return {
         "phase": "2-preview",
-        "message": "万豪公开报价适配器处于实验阶段；独立 HTTP 访问尚未验证成功，默认关闭。",
+        "message": "雅高官网页面采集已通过单酒店实测；其余集团与全球酒店覆盖仍在验证。降价复查与 Telegram 发送链路已实现。",
         "hotels": await db.scalar(select(func.count()).select_from(Hotel)),
         "rates_today": await db.scalar(
             select(func.count()).select_from(PriceHistory).where(PriceHistory.captured_at >= midnight)
@@ -103,8 +104,8 @@ async def providers(db: Db):
             if state
             else {
                 "provider": name,
-                "status": "DEGRADED" if name == ProviderName.MARRIOTT else "BROKEN",
-                "last_error": "HTTP_UNVERIFIED" if name == ProviderName.MARRIOTT else "NOT_IMPLEMENTED",
+                "status": "DEGRADED" if name in FACTORIES else "BROKEN",
+                "last_error": "NOT_YET_RUN" if name in FACTORIES else "NOT_IMPLEMENTED",
                 "requests_today": 0,
                 "success_count": 0,
                 "failure_count": 0,
@@ -112,9 +113,10 @@ async def providers(db: Db):
         )
         item["implemented"] = name in FACTORIES
         item["enabled"] = settings.provider_policy(name).enabled and item["implemented"]
-        item["verification"] = (
-            "BROWSER_OBSERVED_HTTP_UNVERIFIED" if name == ProviderName.MARRIOTT else "NOT_IMPLEMENTED"
-        )
+        item["verification"] = {
+            "marriott": "BROWSER_OBSERVED_HTTP_UNVERIFIED",
+            "accor": "PUBLIC_PAGE_SAMPLE_VERIFIED",
+        }.get(name, "NOT_IMPLEMENTED")
         total = item["success_count"] + item["failure_count"]
         item["success_rate"] = item["success_count"] / total if total else None
         result.append(item)
@@ -193,7 +195,7 @@ async def enqueue_calendar(hotel_id: str, db: Db, month: str):
     hotel = await db.get(Hotel, hotel_id)
     if not hotel:
         raise HTTPException(404, "Hotel not found")
-    if hotel.provider != ProviderName.MARRIOTT or hotel.provider not in FACTORIES:
+    if hotel.provider not in FACTORIES:
         raise HTTPException(409, "No verified calendar adapter for this hotel")
     if not settings.provider_policy(hotel.provider).enabled:
         raise HTTPException(409, "Provider disabled")
@@ -202,14 +204,14 @@ async def enqueue_calendar(hotel_id: str, db: Db, month: str):
     except ValueError:
         raise HTTPException(422, "month must be YYYY-MM") from None
     today = date.today()
-    eligible = [day for day in dates if today <= day <= today + timedelta(days=365)]
+    eligible = [day for day in dates if today <= day < today + timedelta(days=365)]
     if not eligible:
         raise HTTPException(422, "Month outside the next 365 days")
     rows = [
         await enqueue(
             db,
             JobInput(
-                provider=ProviderName.MARRIOTT,
+                provider=hotel.provider,
                 kind=JobKind.FETCH_CALENDAR,
                 hotel_id=hotel.id,
                 check_in=day,
@@ -239,8 +241,8 @@ async def add_watchlist(data: HotelWatchInput, db: Db):
     hotel = await db.get(Hotel, data.hotel_id)
     if not hotel:
         raise HTTPException(404, "Hotel not found")
-    if hotel.provider != ProviderName.MARRIOTT:
-        raise HTTPException(409, "Only Marriott hotel watchlists are in Phase 2 preview")
+    if hotel.provider not in FACTORIES:
+        raise HTTPException(409, "Provider does not yet have a rate adapter")
     existing = await db.scalar(
         select(Watchlist).where(
             Watchlist.scope == "hotel",
@@ -278,11 +280,26 @@ async def add_job(data: JobInput, db: Db):
     if not settings.provider_policy(data.provider).enabled:
         raise HTTPException(409, "Provider disabled")
     if data.kind == JobKind.VERIFY_ANOMALY:
-        raise HTTPException(409, "Confirmation engine pending Phase 3")
+        raise HTTPException(409, "Verification jobs are created automatically from detected price drops")
     if data.hotel_id:
         hotel = await db.get(Hotel, data.hotel_id)
         if not hotel or hotel.provider != data.provider:
             raise HTTPException(400, "Hotel/provider mismatch")
-    row = await enqueue(db, data)
+    try:
+        row = await enqueue(db, data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     await db.commit()
     return {"id": row.id, "status": row.status}
+
+
+@app.get("/api/alerts")
+async def alerts(db: Db, limit: int = Query(50, ge=1, le=200)):
+    rows = (await db.scalars(select(PriceAlert).order_by(PriceAlert.created_at.desc()).limit(limit))).all()
+    return [encode(row) for row in rows]
+
+
+@app.get("/api/notifications", dependencies=[Depends(admin)])
+async def notifications(db: Db, limit: int = Query(50, ge=1, le=200)):
+    rows = (await db.scalars(select(NotificationLog).order_by(NotificationLog.id.desc()).limit(limit))).all()
+    return [encode(row) for row in rows]

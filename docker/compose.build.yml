@@ -3,7 +3,10 @@ services:
     build:
       context: .
       target: api
-  hotel-monitor-worker: *backend-build
+  hotel-monitor-worker:
+    build:
+      context: .
+      target: worker
   hotel-monitor-scheduler: *backend-build
   hotel-monitor-frontend:
     build:

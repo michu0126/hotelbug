@@ -2,6 +2,7 @@ from enum import StrEnum
 
 
 class ErrorCode(StrEnum):
+    BROWSER_UNAVAILABLE = "BROWSER_UNAVAILABLE"
     NETWORK_ERROR = "NETWORK_ERROR"
     TIMEOUT = "TIMEOUT"
     HTTP_ERROR = "HTTP_ERROR"

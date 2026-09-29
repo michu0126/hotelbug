@@ -2,7 +2,7 @@
 
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -42,6 +42,7 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
         horizon = watch.filters.get("days_ahead", 30)
         if not isinstance(hotel_id, str) or type(horizon) is not int or not 1 <= horizon <= 365:
             continue
+        horizon = min(horizon, 364)
         hotel = await session.get(Hotel, hotel_id)
         if not hotel or not hotel.active or hotel.provider not in FACTORIES:
             continue
@@ -95,4 +96,80 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
         rotation.value = {"index": next_index}
     else:
         session.add(AppSetting(key="watchlist_rotation", value={"index": next_index}))
+    return created
+
+
+async def expand_global(session: AsyncSession, settings: Settings) -> int:
+    """Fair keyset rotation across all catalog hotels, with a persistent date cursor."""
+    if not settings.global_monitoring_enabled:
+        return 0
+    enabled = [name for name in FACTORIES if settings.provider_policy(name).enabled]
+    if not enabled:
+        return 0
+    pending = await session.scalar(
+        select(func.count())
+        .select_from(CrawlJob)
+        .where(CrawlJob.status.in_(("PENDING", "QUEUED", "RUNNING")))
+    )
+    budget = min(settings.global_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
+    if not budget:
+        return 0
+    rotation = await session.get(AppSetting, "global_hotel_cursor")
+    last_id = rotation.value.get("hotel_id", "") if rotation else ""
+    query = select(Hotel).where(Hotel.active.is_(True), Hotel.provider.in_(enabled))
+    hotels = (await session.scalars(query.where(Hotel.id > last_id).order_by(Hotel.id).limit(budget))).all()
+    if not hotels:
+        hotels = (await session.scalars(query.order_by(Hotel.id).limit(budget))).all()
+    now = utcnow()
+    created = 0
+    for hotel in hotels:
+        last_id = hotel.id
+        state = await session.get(ProviderStatus, hotel.provider)
+        if state and state.blocked_until and state.blocked_until.replace(tzinfo=now.tzinfo) > now:
+            continue
+        cursor_key = f"global_date_cursor:{hotel.id}"
+        cursor = await session.get(AppSetting, cursor_key)
+        offset = cursor.value.get("offset", 0) if cursor else 0
+        if type(offset) is not int or not 0 <= offset < 365:
+            offset = 0
+        next_value = {"offset": (offset + 1) % 365}
+        if cursor:
+            cursor.value = next_value
+        else:
+            session.add(AppSetting(key=cursor_key, value=next_value))
+        check_in = date.today() + timedelta(days=offset)
+        temperature = tier(offset)
+        hours = {
+            "HOT": settings.hot_interval_hours,
+            "WARM": settings.warm_interval_hours,
+            "COLD": settings.cold_interval_hours,
+        }[temperature]
+        recent = await session.scalar(
+            select(CrawlJob.id)
+            .where(
+                CrawlJob.hotel_id == hotel.id,
+                CrawlJob.check_in == check_in,
+                CrawlJob.kind.in_((JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR)),
+                CrawlJob.created_at >= now - timedelta(hours=hours),
+            )
+            .limit(1)
+        )
+        if recent:
+            continue
+        await enqueue(
+            session,
+            JobInput(
+                provider=hotel.provider,
+                kind=JobKind.FETCH_RATE,
+                hotel_id=hotel.id,
+                check_in=check_in,
+                check_out=check_in + timedelta(days=1),
+                priority={"HOT": 80, "WARM": 60, "COLD": 40}[temperature],
+            ),
+        )
+        created += 1
+    if rotation:
+        rotation.value = {"hotel_id": last_id}
+    else:
+        session.add(AppSetting(key="global_hotel_cursor", value={"hotel_id": last_id}))
     return created

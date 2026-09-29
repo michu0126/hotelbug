@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+import httpx
 from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -12,9 +13,11 @@ from app.database.session import Session
 from app.models.tables import CrawlJob, ProviderStatus, utcnow
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
+from app.services.catalogs import discover_accor
 from app.services.jobs import enqueue
+from app.services.notifications import deliver_one
 from app.services.queue import Queue
-from app.services.watchlists import expand_watchlists
+from app.services.watchlists import expand_global, expand_watchlists
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +92,7 @@ async def tick(sessions: async_sessionmaker, queue: Queue, settings: Settings) -
                         session, JobInput(provider=provider, kind=JobKind.PROVIDER_HEALTHCHECK, priority=10)
                     )
             await expand_watchlists(session, settings)
+            await expand_global(session, settings)
             return dispatched
     finally:
         await queue.unlock("hotelbug:scheduler", token)
@@ -99,15 +103,29 @@ async def main() -> None:
     configure_logging(settings.log_level)
     redis = Redis.from_url(settings.redis_url.get_secret_value(), decode_responses=True)
     queue = Queue(redis)
+    telegram_client = httpx.AsyncClient(
+        follow_redirects=False,
+        proxy=settings.telegram_proxy_url.get_secret_value()
+        or settings.browser_proxy_url.get_secret_value()
+        or None,
+    )
+    catalog_client = httpx.AsyncClient(
+        follow_redirects=True,
+        proxy=settings.browser_proxy_url.get_secret_value() or None,
+    )
     try:
         while True:
             try:
+                await discover_accor(Session, queue, settings, catalog_client)
                 await tick(Session, queue, settings)
+                await deliver_one(Session, settings, telegram_client)
                 await redis.set("hotelbug:heartbeat:scheduler", utcnow().isoformat(), ex=60)
             except Exception as exc:
                 log.error("scheduler cycle failed: %s", type(exc).__name__)
             await asyncio.sleep(settings.scheduler_interval_seconds)
     finally:
+        await catalog_client.aclose()
+        await telegram_client.aclose()
         await redis.aclose()
 
 

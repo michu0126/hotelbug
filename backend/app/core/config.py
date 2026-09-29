@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import BaseModel, Field, SecretStr
@@ -23,6 +24,15 @@ class Settings(BaseSettings):
     discovery_interval_days: int = Field(default=14, ge=7, le=30)
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
+    telegram_proxy_url: SecretStr = SecretStr("")
+    alert_drop_fraction: Decimal = Field(default=Decimal("0.5"), gt=0, lt=1)
+    alert_min_history_days: int = Field(default=3, ge=2, le=90)
+    alert_confirmation_seconds: int = Field(default=60, ge=5, le=3600)
+    global_monitoring_enabled: bool = True
+    global_jobs_per_tick: int = Field(default=20, ge=1, le=500)
+    max_pending_jobs: int = Field(default=2000, ge=20, le=100000)
+    browser_proxy_url: SecretStr = SecretStr("")
+    browser_channel: str = ""
     bark_url: SecretStr = SecretStr("")
     webhook_url: SecretStr = SecretStr("")
 

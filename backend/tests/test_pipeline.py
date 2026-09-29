@@ -116,9 +116,9 @@ async def test_blocked_provider_is_paused(sessions, queue, monkeypatch):
 
 
 async def test_unimplemented_provider_does_not_fake_success(sessions, queue, monkeypatch):
-    monkeypatch.setenv("ACCOR_ENABLED", "true")
+    monkeypatch.setenv("GHA_ENABLED", "true")
     async with sessions() as s, s.begin():
-        row = await enqueue(s, JobInput(provider="accor", kind=JobKind.PROVIDER_HEALTHCHECK))
+        row = await enqueue(s, JobInput(provider="gha", kind=JobKind.PROVIDER_HEALTHCHECK))
         job_id = row.id
     await tick(sessions, queue, Settings())
     await process_one(sessions, queue, Settings())
@@ -136,7 +136,7 @@ async def test_watchlist_incremental_jobs_respect_cooldown(sessions, queue, monk
                 name="One hotel", scope="hotel", filters={"hotel_id": hotel.id, "days_ahead": 2}, enabled=True
             )
         )
-    settings = Settings()
+    settings = Settings(global_monitoring_enabled=False)
     for _ in range(4):
         await tick(sessions, queue, settings)
     async with sessions() as s:

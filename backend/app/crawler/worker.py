@@ -15,7 +15,8 @@ from app.database.session import Session
 from app.models.tables import CrawlJob, Hotel, ProviderStatus, utcnow
 from app.providers.registry import create_provider
 from app.schemas.domain import JobKind, RateRequest
-from app.services.jobs import backoff
+from app.services.alerts import confirm_drop, detect_drops
+from app.services.jobs import backoff, within_monitoring_window
 from app.services.queue import Queue
 from app.services.rates import persist_rates, upsert_hotel
 
@@ -29,20 +30,18 @@ async def execute(job: CrawlJob, hotel: Hotel | None):
             return await provider.health_check()
         if job.kind == JobKind.DISCOVER_HOTELS:
             return await provider.search_hotels(job.payload)
-        if job.kind == JobKind.VERIFY_ANOMALY:
-            raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Phase 3 confirmation engine is not enabled")
         if not hotel:
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hotel not found")
         request = RateRequest(
             provider_hotel_id=hotel.provider_hotel_id,
             check_in=job.check_in,
             check_out=job.check_out,
-            adults=2,
-            rooms=1,
+            adults=job.payload.get("adults", 2),
+            rooms=job.payload.get("rooms", 1),
         )
         if job.kind == JobKind.FETCH_CALENDAR:
             return await provider.get_calendar_rates(request)
-        if job.kind != JobKind.FETCH_RATE:
+        if job.kind not in (JobKind.FETCH_RATE, JobKind.VERIFY_ANOMALY):
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Unsupported job type")
         return await provider.search_rates(request)
     finally:
@@ -64,6 +63,11 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
         ):
             return True
         policy = settings.provider_policy(job.provider)
+        if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
+            if not within_monitoring_window(job.check_in, job.check_out):
+                job.status = "CANCELLED"
+                job.error_message = "Stay outside the next 365 days"
+                return True
         if not policy.enabled:
             job.status = "CANCELLED"
             job.error_message = "Provider disabled by configuration"
@@ -93,11 +97,11 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
     result = None
     try:
         result = await asyncio.wait_for(execute(job, hotel), settings.job_timeout_seconds)
-        if job.kind == JobKind.FETCH_RATE and any(
+        if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY) and any(
             r.check_in != job.check_in or r.check_out != job.check_out for r in result
         ):
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Rate dates do not match job")
-        if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR):
+        if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
             if any(
                 r.provider != job.provider or r.provider_hotel_id != hotel.provider_hotel_id for r in result
             ):
@@ -166,7 +170,7 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                         )
                     )
                     current.scheduled_at = state.blocked_until
-                elif error.code == ErrorCode.NOT_IMPLEMENTED:
+                elif error.code in (ErrorCode.NOT_IMPLEMENTED, ErrorCode.BROWSER_UNAVAILABLE):
                     state.status = "BROKEN"
             else:
                 if job.kind == JobKind.DISCOVER_HOTELS:
@@ -174,8 +178,12 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                         if data.provider != job.provider:
                             raise ValueError("discovery provider mismatch")
                         await upsert_hotel(session, data)
-                elif job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR):
+                elif job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
                     await persist_rates(session, hotel, result, job.id)
+                    if job.kind == JobKind.VERIFY_ANOMALY:
+                        await confirm_drop(session, job.payload.get("alert_id", ""), job.id, result)
+                    else:
+                        await detect_drops(session, hotel, result, settings)
                 state.status = result.status if job.kind == JobKind.PROVIDER_HEALTHCHECK else "ONLINE"
                 state.success_count += 1
                 state.last_success, state.last_error = utcnow(), None

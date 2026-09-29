@@ -11,6 +11,17 @@ USER hotelbug
 EXPOSE 8000
 CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
 
+FROM api AS worker
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN pip install --no-cache-dir -r requirements-browser.txt \
+    && python -m playwright install --with-deps chromium \
+    && mkdir -p /home/hotelbug \
+    && usermod -d /home/hotelbug hotelbug \
+    && chown -R hotelbug:hotelbug /ms-playwright /home/hotelbug
+USER hotelbug
+CMD ["python", "-m", "app.crawler.worker"]
+
 FROM node:22-alpine AS frontend-build
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./

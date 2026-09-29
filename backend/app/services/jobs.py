@@ -1,19 +1,27 @@
 import hashlib
 import json
 import random
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import CrawlJob, utcnow
-from app.schemas.domain import JobInput
+from app.schemas.domain import JobInput, JobKind
 
 LIVE = ("PENDING", "QUEUED", "RUNNING")
 
 
+def within_monitoring_window(check_in: date | None, check_out: date | None) -> bool:
+    today = date.today()
+    return bool(check_in and check_out and today <= check_in < check_out <= today + timedelta(days=365))
+
+
 async def enqueue(session: AsyncSession, job: JobInput, delay_seconds: float = 0) -> CrawlJob:
+    if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
+        if not within_monitoring_window(job.check_in, job.check_out):
+            raise ValueError("Stay must be within the next 365 days")
     data = job.model_dump(mode="json")
     identity = {k: v for k, v in data.items() if k != "priority"}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()

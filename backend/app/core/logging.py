@@ -8,7 +8,10 @@ from urllib.parse import urlsplit
 def safe_url(value: str) -> str:
     try:
         parsed = urlsplit(value)
-        return f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+        path = parsed.path
+        if parsed.hostname == "api.telegram.org":
+            path = re.sub(r"^/bot[^/]+", "/bot[REDACTED]", path)
+        return f"{parsed.scheme}://{parsed.hostname or ''}{path}"
     except ValueError:
         return "<invalid-url>"
 
