@@ -24,6 +24,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy")
     parser.add_argument("--provider", choices=("accor", "gha"), default="accor")
+    parser.add_argument("--official-url", help="GHA sitemap detail URL for discovery instead of a known ID")
     args = parser.parse_args()
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
     os.environ[args.provider.upper() + "_ENABLED"] = "true"
@@ -47,7 +48,9 @@ async def main():
                     JobInput(
                         provider=args.provider,
                         kind=JobKind.DISCOVER_HOTELS,
-                        payload={"provider_hotel_id": provider_code},
+                        payload={"official_url": args.official_url}
+                        if args.official_url
+                        else {"provider_hotel_id": provider_code},
                     ),
                 )
                 discovery_id = job.id

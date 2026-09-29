@@ -164,6 +164,31 @@ class GHABrowserProvider(AccorBrowserProvider):
             ) from exc
 
     async def search_hotels(self, query: dict) -> list[HotelData]:
+        if query.get("official_url"):
+            url = urlparse(query["official_url"])
+            if (
+                url.scheme != "https"
+                or url.hostname != "www.ghadiscovery.com"
+                or not re.fullmatch(r"/[a-z0-9-]+/[a-z0-9-]+/?", url.path)
+            ):
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "GHA catalog URL invalid")
+            try:
+                page = await self._get_page()
+                response = await page.goto(url.geturl(), wait_until="domcontentloaded", timeout=45000)
+                if response and response.status >= 400:
+                    raise ProviderError(ErrorCode.HTTP_ERROR, f"GHA catalog HTTP {response.status}")
+                link = page.locator('a[href*="/booking/select_room?"]').first
+                await link.wait_for(state="attached", timeout=15000)
+                target = urlparse(urljoin(ROOT, await link.get_attribute("href")))
+                if target.hostname != "www.ghadiscovery.com":
+                    raise ProviderError(ErrorCode.INVALID_RESPONSE, "GHA booking link off-site")
+                code = parse_qs(target.query).get("hotelId", [""])[0]
+                return [await self.get_hotel_details(hotel_code(code))]
+            except BrowserError as exc:
+                raise ProviderError(
+                    ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
+                    "GHA catalog detail failed",
+                ) from exc
         return [await self.get_hotel_details(str(query.get("provider_hotel_id", "")))]
 
     async def search_rates(self, search: RateRequest) -> list[RateData]:

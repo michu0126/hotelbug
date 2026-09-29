@@ -12,6 +12,12 @@ DOM 中 `.tid-selectBtn` 的三层父节点包含计划标题 h5、价格 h5、�
 真实 Worker 测试 `tests.smoke_accor_pipeline --provider gha --proxy ...` 已通过：发现任务 SUCCEEDED、查价任务 SUCCEEDED，3 条 PriceHistory，Provider ONLINE。此轮官网显示 USD 207/217/252，币种按实际页面保存而非固定 THB。
 11 个离线测试覆盖日期、人数、酒店 URL、会员排除、税费、币种和金额匹配。仍需验证其他品牌、跨年日期的页面格式、精确总价/条款及全量目录，不能据单酒店样本声明 GHA 全量完成。
 
+### 自动目录接入
+
+Scheduler 已加入 GHA sitemap 索引遍历，每轮最多请求一个目录、持久化地图/酒店游标、按队列余量提交详情页发现任务。详情页读取 BOOK NOW 的数字 hotelId，再验证预订页酒店信息并入库，不直接将候选路径当作已收录酒店。
+当前官网索引列出 6 个子目录，其中 1–3 返回 200，4–6 返回 404；404/410 记录在 `catalog:gha.missing_maps` 并继续后续目录。可读目录的酒店页及酒店活动页父路径合并得到 825 个去重候选，尚未逐一验证，不能宣称 825 家已抓取成功或全量覆盖。
+详情页 URL → 正式 Worker 发现 → 查价 → SQLite 入库实测成功，样本 Avani Sukhumvit Bangkok Hotel 保存 3 条真实报价。目录重启续跑、去重和缺失子目录继续执行均有自动测试。
+
 ## 早期接口观察（历史记录，不是当前实现依赖）
 状态：Python适配尚未实现；Phase6。旧Node页面采集器独立保留。
 官网入口：https://www.ghadiscovery.com/；酒店详情→BOOK NOW→预订页。

@@ -13,7 +13,7 @@ from app.database.session import Session
 from app.models.tables import CrawlJob, ProviderStatus, utcnow
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
-from app.services.catalogs import discover_accor
+from app.services.catalogs import discover_accor, discover_gha
 from app.services.jobs import enqueue
 from app.services.notifications import deliver_one
 from app.services.queue import Queue
@@ -117,6 +117,7 @@ async def main() -> None:
         while True:
             try:
                 await discover_accor(Session, queue, settings, catalog_client)
+                await discover_gha(Session, queue, settings, catalog_client)
                 await tick(Session, queue, settings)
                 await deliver_one(Session, settings, telegram_client)
                 await redis.set("hotelbug:heartbeat:scheduler", utcnow().isoformat(), ex=60)
