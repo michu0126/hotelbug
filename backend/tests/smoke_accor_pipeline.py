@@ -23,8 +23,12 @@ from app.services.queue import Queue
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy")
+    parser.add_argument("--provider", choices=("accor", "gha"), default="accor")
     args = parser.parse_args()
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
+    os.environ[args.provider.upper() + "_ENABLED"] = "true"
+    os.environ[args.provider.upper() + "_RATE_LIMIT_SECONDS"] = "1"
+    provider_code = "0338" if args.provider == "accor" else "10624"
     if args.proxy:
         os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
@@ -41,7 +45,9 @@ async def main():
                 job = await enqueue(
                     session,
                     JobInput(
-                        provider="accor", kind=JobKind.DISCOVER_HOTELS, payload={"provider_hotel_id": "0338"}
+                        provider=args.provider,
+                        kind=JobKind.DISCOVER_HOTELS,
+                        payload={"provider_hotel_id": provider_code},
                     ),
                 )
                 discovery_id = job.id
@@ -57,7 +63,7 @@ async def main():
                 job = await enqueue(
                     session,
                     JobInput(
-                        provider="accor",
+                        provider=args.provider,
                         kind=JobKind.FETCH_RATE,
                         hotel_id=hotel.id,
                         check_in=day,
@@ -70,7 +76,7 @@ async def main():
             await process_one(sessions, queue, settings)
             async with sessions() as session:
                 job = await session.get(CrawlJob, rate_id)
-                state = await session.get(ProviderStatus, "accor")
+                state = await session.get(ProviderStatus, args.provider)
                 count = await session.scalar(select(func.count()).select_from(PriceHistory))
                 print(
                     json.dumps(

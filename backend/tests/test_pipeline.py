@@ -116,9 +116,9 @@ async def test_blocked_provider_is_paused(sessions, queue, monkeypatch):
 
 
 async def test_unimplemented_provider_does_not_fake_success(sessions, queue, monkeypatch):
-    monkeypatch.setenv("GHA_ENABLED", "true")
+    monkeypatch.setenv("HYATT_ENABLED", "true")
     async with sessions() as s, s.begin():
-        row = await enqueue(s, JobInput(provider="gha", kind=JobKind.PROVIDER_HEALTHCHECK))
+        row = await enqueue(s, JobInput(provider="hyatt", kind=JobKind.PROVIDER_HEALTHCHECK))
         job_id = row.id
     await tick(sessions, queue, Settings())
     await process_one(sessions, queue, Settings())

@@ -29,7 +29,8 @@ async function discover(){
   actionBusy.value=true;actionMessage.value='';
   try{
     const code=propertyCode.value.trim().toUpperCase();
-    if(!(selectedProvider.value==='accor'?/^[A-Z0-9]{4}$/:/^[A-Z0-9]{5}$/).test(code))throw new Error('雅高请输入 4 位酒店代码，万豪请输入 5 位酒店代码');
+    const pattern={accor:/^[A-Z0-9]{4}$/,marriott:/^[A-Z0-9]{5}$/,gha:/^[1-9][0-9]{0,9}$/}[selectedProvider.value];
+    if(!pattern?.test(code))throw new Error('雅高请输入 4 位代码，万豪 5 位代码，GHA 输入预订链接中的数字 hotelId');
     const result=await api('/jobs',{method:'POST',headers:{'content-type':'application/json','authorization':`Bearer ${adminToken.value}`},
       body:JSON.stringify({provider:selectedProvider.value,kind:'DISCOVER_HOTELS',priority:60,payload:{provider_hotel_id:code}})});
     actionMessage.value=`酒店资料任务已提交：${result.id}。完成后刷新状态。`;
@@ -69,8 +70,8 @@ onUnmounted(()=>clearInterval(timer));
     <p v-if="error" role="alert" class="notice error">{{error}}</p>
     <p class="notice">官网采集正在逐集团验证。已收录酒店按未来一年轮询；同条件价格较历史基准下降 50% 时自动复查，确认后通过 Telegram 通知。历史基准至少需要 3 天记录。</p>
     <section class="cards"><article><small>酒店库</small><strong>{{status?.hotels??'—'}}</strong></article><article><small>今日采集报价</small><strong>{{status?.rates_today??'—'}}</strong></article><article><small>待处理任务</small><strong>{{status?.queued_jobs??'—'}}</strong></article><article><small>已确认异常</small><strong>{{status?.confirmed_alerts??'—'}}</strong></article></section>
-    <section class="panel"><h2>酒店与价格日历</h2><p class="muted">启用对应集团并设置管理令牌后可提交任务。雅高已通过官网公开价格实测；其他集团的状态见下方。</p>
-      <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="marriott">万豪（实验）</option></select></label><label>酒店代码<input v-model="propertyCode" maxlength="5" placeholder="雅高 0338 / 万豪 NYCMQ"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
+    <section class="panel"><h2>酒店与价格日历</h2><p class="muted">启用对应集团并设置管理令牌后可提交任务。雅高与 GHA 已通过官网单酒店采集入库实测；其他集团的状态见下方。</p>
+      <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="gha">GHA</option><option value="marriott">万豪（实验）</option></select></label><label>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="雅高 0338 / GHA 10624"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
       <div class="fields"><label>酒店<select v-model="hotelId"><option value="">请选择</option><option v-for="h in hotels" :key="h.id" :value="h.id">{{h.hotel_name}} · {{h.city||h.provider_hotel_id}}</option></select></label><label>月份<input v-model="month" type="month"></label><button class="primary" :disabled="actionBusy||!hotelId" @click="crawlMonth">采集本月报价</button></div>
       <div class="fields"><label>自动监控未来天数<select v-model="daysAhead"><option :value="30">30 天</option><option :value="90">90 天</option><option :value="365">365 天</option></select></label><button class="primary" :disabled="actionBusy||!hotelId" @click="watchHotel">保存自动监控</button><small>已启用酒店监控 {{watches.filter(w=>w.enabled).length}} 项</small></div>
       <p v-if="actionMessage" role="status" class="notice">{{actionMessage}}</p>
