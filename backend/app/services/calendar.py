@@ -2,13 +2,17 @@
 
 import calendar as calendar_module
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tables import Hotel, PriceHistory, Rate
+from app.models.tables import Hotel, PriceHistory, Rate, StayScan
+
+
+def as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc)
 
 
 def month_bounds(month: str) -> tuple[date, date]:
@@ -34,12 +38,15 @@ def calendar_rows(
     current: list[Rate],
     history: list[PriceHistory],
     historical_lows: dict[str, Decimal] | None = None,
+    scans: list[StayScan] | None = None,
 ) -> dict:
     by_day: dict[date, list[Rate]] = defaultdict(list)
     for rate in current:
         if (
             rate.availability
             and rate.total_price is not None
+            and rate.adults == 2
+            and rate.rooms == 1
             and (hotel.default_currency is None or rate.currency == hotel.default_currency)
         ):
             by_day[rate.check_in].append(rate)
@@ -47,10 +54,18 @@ def calendar_rows(
     for item in history:
         if item.availability and item.total_price is not None:
             prior[item.offer_key].append(item)
+    scans_by_day = {scan.check_in: scan for scan in scans or [] if (scan.check_out - scan.check_in).days == 1}
     days = []
     for day in month_dates(month):
         choices = by_day.get(day, [])
         best = min(choices, key=lambda r: (r.total_price, r.offer_key)) if choices else None
+        scan = scans_by_day.get(day)
+        if scan and scan.status == "UNAVAILABLE":
+            observed = as_utc(scan.observed_at)
+            captured = as_utc(best.captured_at) if best else None
+            if captured is None or observed >= captured:
+                days.append({"date": day.isoformat(), "status": "UNAVAILABLE"})
+                continue
         if not best:
             days.append({"date": day.isoformat(), "status": "NO_DATA"})
             continue
@@ -59,8 +74,8 @@ def calendar_rows(
         historical_low = (historical_lows or {}).get(best.offer_key)
         if historical_low is None:
             historical_low = min((item.total_price for item in observations), default=None)
-        older = [item for item in observations if item.captured_at < best.captured_at]
-        previous = max(older, key=lambda item: item.captured_at) if older else None
+        older = [item for item in observations if as_utc(item.captured_at) < as_utc(best.captured_at)]
+        previous = max(older, key=lambda item: as_utc(item.captured_at)) if older else None
         drop = None
         if previous and previous.total_price > 0:
             drop = ((previous.total_price - best.total_price) / previous.total_price * 100).quantize(
@@ -92,12 +107,25 @@ def calendar_rows(
 
 async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
     start, end = month_bounds(month)
+    scans = (
+        await session.scalars(
+            select(StayScan).where(
+                StayScan.hotel_id == hotel.id,
+                StayScan.check_in >= start,
+                StayScan.check_in < end,
+                StayScan.adults == 2,
+                StayScan.rooms == 1,
+            )
+        )
+    ).all()
     current = (
         await session.scalars(
             select(Rate).where(
                 Rate.hotel_id == hotel.id,
                 Rate.check_in >= start,
                 Rate.check_in < end,
+                Rate.adults == 2,
+                Rate.rooms == 1,
             )
         )
     ).all()
@@ -118,7 +146,7 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
         )
     }
     if not keys:
-        return calendar_rows(hotel, month, current, [])
+        return calendar_rows(hotel, month, current, [], scans=scans)
     lows = dict(
         (
             await session.execute(
@@ -143,4 +171,4 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
             )
         )
     ).all()
-    return calendar_rows(hotel, month, current, history, lows)
+    return calendar_rows(hotel, month, current, history, lows, scans)

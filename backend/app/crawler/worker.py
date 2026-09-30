@@ -18,7 +18,7 @@ from app.schemas.domain import JobKind, RateRequest
 from app.services.alerts import confirm_drop, detect_drops
 from app.services.jobs import backoff, within_monitoring_window
 from app.services.queue import Queue
-from app.services.rates import persist_rates, upsert_hotel
+from app.services.rates import finalize_stay_scan, persist_rates, upsert_hotel
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +106,11 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                 r.provider != job.provider or r.provider_hotel_id != hotel.provider_hotel_id for r in result
             ):
                 raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hotel identity does not match job")
+            if any(
+                r.adults != job.payload.get("adults", 2) or r.rooms != job.payload.get("rooms", 1)
+                for r in result
+            ):
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Room occupancy does not match job")
         if job.kind == JobKind.PROVIDER_HEALTHCHECK and result.status != "ONLINE":
             raise ProviderError(
                 ErrorCode.BLOCKED_BY_ANTIBOT if result.status == "BLOCKED" else ErrorCode.PROVIDER_CHANGED,
@@ -180,6 +185,16 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                         await upsert_hotel(session, data)
                 elif job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
                     await persist_rates(session, hotel, result, job.id)
+                    await finalize_stay_scan(
+                        session,
+                        hotel,
+                        job.check_in,
+                        job.check_out,
+                        job.payload.get("adults", 2),
+                        job.payload.get("rooms", 1),
+                        result,
+                        job.id,
+                    )
                     if job.kind == JobKind.VERIFY_ANOMALY:
                         await confirm_drop(session, job.payload.get("alert_id", ""), job.id, result)
                     else:

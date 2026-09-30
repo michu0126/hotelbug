@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.crawler.worker import process_one
 from app.models.tables import Base, CrawlJob, Hotel, PriceHistory, ProviderStatus
 from app.schemas.domain import JobInput, JobKind
+from app.services.calendar import get_calendar
 from app.services.jobs import enqueue
 from app.services.queue import Queue
 
@@ -25,12 +26,16 @@ async def main():
     parser.add_argument("--proxy")
     parser.add_argument("--provider", choices=("accor", "gha"), default="accor")
     parser.add_argument("--official-url", help="GHA sitemap detail URL for discovery instead of a known ID")
+    parser.add_argument("--code", help="Accor or GHA hotel code for a single live pipeline test")
     parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 10, 7))
+    parser.add_argument(
+        "--expect-empty", action="store_true", help="Require a successful no-availability job"
+    )
     args = parser.parse_args()
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
     os.environ[args.provider.upper() + "_ENABLED"] = "true"
     os.environ[args.provider.upper() + "_RATE_LIMIT_SECONDS"] = "1"
-    provider_code = "0338" if args.provider == "accor" else "10624"
+    provider_code = args.code or ("0338" if args.provider == "accor" else "10624")
     if args.proxy:
         os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
@@ -82,6 +87,10 @@ async def main():
                 job = await session.get(CrawlJob, rate_id)
                 state = await session.get(ProviderStatus, args.provider)
                 count = await session.scalar(select(func.count()).select_from(PriceHistory))
+                calendar = await get_calendar(session, hotel, day.strftime("%Y-%m"))
+                day_status = next(
+                    item["status"] for item in calendar["days"] if item["date"] == day.isoformat()
+                )
                 print(
                     json.dumps(
                         {
@@ -90,12 +99,18 @@ async def main():
                             "error": job.error_type,
                             "persisted_quotes": count,
                             "provider_status": state.status,
+                            "calendar_status": day_status,
                         },
                         ensure_ascii=True,
                     ),
                     flush=True,
                 )
-                if job.status != "SUCCEEDED" or count < 1:
+                expected_status = "UNAVAILABLE" if args.expect_empty else "AVAILABLE"
+                if (
+                    job.status != "SUCCEEDED"
+                    or (count == 0) != args.expect_empty
+                    or day_status != expected_status
+                ):
                     raise SystemExit(2)
         finally:
             await redis.aclose()

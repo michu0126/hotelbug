@@ -1,5 +1,5 @@
 # Accor 研究记录
-状态：已实现官网页面适配器并注册；单酒店真实自动采集已通过，全球覆盖与 NAS 镜像待验证。
+状态：已实现官网页面适配器并注册；多酒店真实自动采集已通过，全球目录尚未逐一验证。
 
 2026-09-29，开发机 Playwright Chrome 经用户提供的 HTTP 代理访问：
 robots.txt → sitemap-fh.xml → sitemap-fh.en.xml，英文酒店目录包含 5,899 个链接。
@@ -29,9 +29,11 @@ robots.txt → sitemap-fh.xml → sitemap-fh.en.xml，英文酒店目录包含 5
 
 实现：`backend/app/providers/accor_browser.py`。
 单次实采：`python -m tests.smoke_accor_browser --proxy http://代理地址:端口`。
-Worker 镜像需要 Chromium，已加入独立 worker 构建/发布目标；尚未发布本次更改。
+Worker 镜像需要 Chromium，已加入独立 worker 构建/发布目标并通过 Linux 容器启动验证。
 
 真实 Worker 集成实测：`tests.smoke_accor_pipeline` 使用真实官网适配器、任务处理器和隔离 SQLite，
 酒店资料任务 SUCCEEDED，报价任务 SUCCEEDED，写入 4 条 PriceHistory，Provider 为 ONLINE。
 不向 Telegram 发送测试行情。Windows 已安装 Chrome 的实测通过；本机 Playwright Chromium
-启动报 spawn UNKNOWN，Linux Worker 镜像仍需独立 CI 验证，不能把两者混为一谈。
+启动报 spawn UNKNOWN，故开发机实测使用安装版 Chrome；Linux Worker 镜像的浏览器启动已由 CI 验证，真实 NAS 网络抓价仍需单独验收。
+
+2026-09-30 追加抽查：官网目录代码 B3N7、C6M1 在 2026-10-08/09 均读到 4 条公开含税费方案。官网新加坡 Pullman Singapore Hill Street（B5L7）同日期读到 2 条；页面当时以 EUR 展示，按原样保存而不猜测本地币种。B5L7 在接近一年上限的 2027-09-28/29 仍读到 4 条真实报价。该远期日期的隔离 Worker 首次运行一度 TIMEOUT，再运行成功入库 4 条、Provider ONLINE；现有 Worker 会对 TIMEOUT 自动退避重试。以上证明这些样本与远期日期可查，不等于全部 5,899 个目录候选均有价。

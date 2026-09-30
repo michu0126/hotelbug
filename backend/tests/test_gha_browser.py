@@ -1,10 +1,18 @@
 from datetime import date
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.core.errors import ProviderError
-from app.providers.gha_browser import booking_url, parse_public_offer, public_room, verify_stay
+from app.providers.gha_browser import (
+    GHABrowserProvider,
+    booking_url,
+    no_availability,
+    parse_public_offer,
+    public_room,
+    verify_stay,
+)
 from app.schemas.domain import RateRequest
 
 SEARCH = RateRequest(provider_hotel_id="10624", check_in=date(2026, 10, 7), check_out=date(2026, 10, 8))
@@ -70,3 +78,20 @@ def test_wrong_hotel_url_and_missing_room_price():
         verify_stay(STAY, booking_url(SEARCH).replace("10624", "99999"), SEARCH)
     with pytest.raises(ProviderError):
         public_room(ROOM.replace("NON-MEMBER RATES", "MEMBER RATES FROM"))
+
+
+def test_explicitly_unavailable_dates_are_not_zero_price():
+    assert no_availability("<p>Selection not available for these dates. Select other room options.</p>")
+    assert not no_availability(ROOM)
+
+
+async def test_explicit_no_availability_returns_empty_quotes(monkeypatch):
+    provider = GHABrowserProvider()
+    page = MagicMock()
+    page.wait_for_function = AsyncMock()
+    page.locator.return_value.count = AsyncMock(return_value=0)
+    page.content = AsyncMock(return_value="<p>Selection not available for these dates.</p>")
+    monkeypatch.setattr(provider, "_open_booking", AsyncMock(return_value=page))
+
+    assert await provider.search_rates(SEARCH) == []
+    page.wait_for_function.assert_awaited_once()

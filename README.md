@@ -1,15 +1,16 @@
 # Hotel Bug Price Monitor
 
-自托管酒店价格情报平台，目标部署环境为群晖/Linux/Docker。当前雅高官网自动采集已通过单酒店真实测试，六集团全球覆盖仍在开发。
+自托管酒店价格情报平台，目标部署环境为群晖/Linux/Docker。雅高与 GHA 已通过官网页面的真实任务测试；六集团全球覆盖仍在开发。
 
 ## 当前交付与边界
 
 - Python 3.12+ / FastAPI / SQLAlchemy / Alembic / PostgreSQL / Redis。
 - 六服务 Compose、独立 Scheduler 与 Worker、持久化任务、优先级、去重、租约恢复、独立 Provider 限流。
-- 标准化 Hotel/Rate 数据结构、Decimal 金额、10 张数据库表、追加式历史、报价身份隔离。
+- 标准化 Hotel/Rate 数据结构、Decimal 金额、追加式历史、报价身份隔离，并记录每次成功查询的有房/无房状态。
 - Vue 3 + Vite 真实基础状态页；无演示报价。
 - Marriott Worker 已切换为 Chromium 官网页面适配器：使用酒店名称搜索、从结果点击 View Rates，再选择日期并读取非会员含税费价。开发机全新浏览器会话仍在官网首页收到 403，NAS 实采尚未验收；启用开关不保证能够获取报价。旧的独立 JSON 适配器仅保留作研究代码，不再是 Worker 默认入口。
-- 雅高浏览器采集器已接入 Worker：真实任务测试成功收录酒店并写入 4 条非会员含税报价。全球目录已发现 5,899 个雅高页面链接，尚未批量导入和验证。
+- 雅高浏览器采集器已接入 Worker：新加坡酒店 2027-09-28 的真实任务成功写入 4 条非会员含税报价。全球目录已发现 5,899 个雅高页面链接，尚未批量导入和验证。
+- GHA 浏览器采集器已接入 Worker：有房日期可写入公开非会员报价，官网明确无房的日期标记为 UNAVAILABLE，不再把旧报价展示为当前可售。全球目录发现约 825 个页面链接，尚未批量验证。
 - 历史中位数降价判断、二次抓取确认、Telegram 重试队列和全年酒店轮询已实现；真实机器人送达、六集团全球数据、Linux浏览器/NAS实采仍待验收。
 - [实施计划](IMPLEMENTATION_PLAN.md) / [Provider 研究记录](docs/providers/)。
 
@@ -59,7 +60,7 @@ docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --build
 任务租约超过执行超时60秒；崩溃任务可恢复，重复崩溃达到上限后终止。
 Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID 环境变量。保存后可点击“发送测试消息”，立即核对 Bot Token、Chat ID 和当前网络出口；该按钮只发一条测试消息，不创建降价提醒，即使自动通知暂时关闭也可使用。有效报价入库后比较同一酒店、日期、房型、房价方案、币种和住客条件的历史每日中位数；至少 3 个历史观察日，默认降幅达到 50% 后排入复查，60 秒后重新采集仍满足条件才生成通知。发送失败持久化重试，429 遵守 Telegram retry_after。Bark/Webhook 尚未实现。
 
-雅高采集启用 `ACCOR_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
+雅高和 GHA 采集分别启用 `ACCOR_ENABLED=true`、`GHA_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
 
 已启用且具有采集适配器的酒店默认进入全球目录轮询，每轮最多生成 20 个日期任务，未来 365 天滚动覆盖，活跃队列默认上限 2000。此处的“全球”指不限制酒店所在国家，不表示官方全球酒店目录或六集团房价适配已经全部验收。`GET /api/alerts` 可查看候选与复查结果；`GET /api/notifications` 需管理令牌，可查看发送结果。Telegram 在发送后进程崩溃、数据库尚未提交时可能重复投递，不能保证外部服务的严格一次发送。
 
@@ -72,7 +73,7 @@ API文档 `/docs` 在API容器端口8000可访问；前端只反代/api，常用
 - GET /api/dashboard、/api/providers、/api/jobs
 - GET /api/hotels?q=Shanghai&provider=marriott
 - GET /api/hotels/{id}、/api/hotels/{id}/history?days=30
-- GET /api/hotels/{id}/calendar?month=2026-10（真实报价日历，缺失日期显示 NO_DATA）
+- GET /api/hotels/{id}/calendar?month=2026-10（真实报价日历；未查询显示 NO_DATA，官网成功查询但无房显示 UNAVAILABLE）
 - POST /api/hotels（Authorization: Bearer ADMIN_TOKEN）
 - POST /api/jobs（同认证，万豪 DISCOVER_HOTELS 可用 `payload.provider_hotel_id` 指定五位代码）
 - POST /api/hotels/{id}/calendar/jobs?month=2026-10（同认证，为未来365天范围内该月逐日生成任务）

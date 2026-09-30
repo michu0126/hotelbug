@@ -18,6 +18,7 @@ ROOT = "https://www.ghadiscovery.com"
 MONEY = re.compile(r"^([A-Z]{3})\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?:\s*/\s*night)?$")
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 WEEKDAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
+NO_AVAILABILITY = "Selection not available for these dates."
 
 
 def hotel_code(code: str) -> str:
@@ -79,6 +80,10 @@ def public_room(html: str) -> tuple[str, str, Decimal]:
     if not heading or not money or "Including taxes and fees" not in soup.get_text(" ", strip=True):
         raise ProviderError(ErrorCode.PROVIDER_CHANGED, "GHA room identity or public inclusive price missing")
     return heading.get_text(" ", strip=True), money[1], Decimal(money[2].replace(",", ""))
+
+
+def no_availability(html: str) -> bool:
+    return NO_AVAILABILITY in BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
 
 
 def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRequest) -> RateData | None:
@@ -197,7 +202,15 @@ class GHABrowserProvider(AccorBrowserProvider):
     async def search_rates(self, search: RateRequest) -> list[RateData]:
         try:
             page = await self._open_booking(search)
-            await page.locator(".tid-viewRates").first.wait_for()
+            await page.wait_for_function(
+                "() => document.querySelector('.tid-viewRates') || "
+                "document.body.innerText.includes('Selection not available for these dates.')",
+                timeout=30000,
+            )
+            if not await page.locator(".tid-viewRates").count():
+                if no_availability(await page.content()):
+                    return []
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "GHA room availability not readable")
             checkbox = page.get_by_role("checkbox")
             if not await checkbox.is_checked():
                 await page.locator("label").filter(has=checkbox).click()

@@ -2,6 +2,8 @@
 状态：未实现；Phase5。官网入口：https://www.hyatt.com/。
 2026-09-27：robots入口429，SYDPH预订页403，正文ERROR:E6020。
 本次未通过正常浏览取得报价数据。遵守Retry-After，暂停，禁止挑战绕过或反复高频重试。
-计划正常访问恢复后观察搜索/日期日历XHR，再决定JSON、HTTP页面或复用浏览器。
+计划正常访问恢复后沿搜索、日期日历与房型页面操作，读取官网可见报价。
 价格Endpoint/Method/Payload/Headers/Cookie/Token/字段映射：全部待验证。
 文档中的Park Hyatt Kuala Lumpur价格仅是用户举例，不是fixture事实，严禁展示为真实价格。
+2026-09-30 新建 Chrome 打开 Grand Hyatt Shanghai 官网详情页，不论是否使用配置的代理，均返回 HTTP 403、页面 `ERROR:E6020`；搜索引擎可读取官网介绍页不等于本自动会话可查价。暂无可比较的官方报价。
+同一代理下改用安装版 Edge 的全新自动会话仍返回 403 和 `ERROR:E6020`，仅换浏览器通道无效。

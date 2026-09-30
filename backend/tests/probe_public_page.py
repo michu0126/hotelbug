@@ -11,11 +11,12 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("url")
     parser.add_argument("--proxy")
+    parser.add_argument("--channel", default="chrome")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--forms", action="store_true")
     args = parser.parse_args()
     async with async_playwright() as playwright:
-        options = {"channel": "chrome", "headless": not args.headed}
+        options = {"channel": args.channel, "headless": not args.headed}
         if args.proxy:
             options["proxy"] = {"server": args.proxy}
         browser = await playwright.chromium.launch(**options)

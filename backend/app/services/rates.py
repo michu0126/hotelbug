@@ -1,7 +1,9 @@
+from datetime import date, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tables import Hotel, PriceHistory, Rate
+from app.models.tables import Hotel, PriceHistory, Rate, StayScan, utcnow
 from app.schemas.domain import HotelData, RateData
 
 
@@ -50,3 +52,76 @@ async def persist_rates(session: AsyncSession, hotel: Hotel, rates: list[RateDat
         await session.flush()
         count += 1
     return count
+
+
+async def finalize_stay_scan(
+    session: AsyncSession,
+    hotel: Hotel,
+    check_in: date,
+    check_out: date,
+    adults: int,
+    rooms: int,
+    rates: list[RateData],
+    job_id: str,
+) -> None:
+    """Retire offers absent from a successful new scan, including an empty stay."""
+    observed_at = max((rate.captured_at for rate in rates), default=utcnow())
+    current_scan = await session.scalar(
+        select(StayScan)
+        .where(
+            StayScan.hotel_id == hotel.id,
+            StayScan.check_in == check_in,
+            StayScan.check_out == check_out,
+            StayScan.adults == adults,
+            StayScan.rooms == rooms,
+        )
+        .with_for_update()
+    )
+    if current_scan:
+        previous = current_scan.observed_at
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        if previous > observed_at:
+            return
+        current_scan.status = "AVAILABLE" if rates else "UNAVAILABLE"
+        current_scan.observed_at = observed_at
+        current_scan.job_id = job_id
+    else:
+        session.add(
+            StayScan(
+                hotel_id=hotel.id,
+                check_in=check_in,
+                check_out=check_out,
+                adults=adults,
+                rooms=rooms,
+                status="AVAILABLE" if rates else "UNAVAILABLE",
+                observed_at=observed_at,
+                job_id=job_id,
+            )
+        )
+    seen = {rate.offer_key() for rate in rates}
+    current_rates = (
+        await session.scalars(
+            select(Rate)
+            .where(
+                Rate.hotel_id == hotel.id,
+                Rate.check_in == check_in,
+                Rate.check_out == check_out,
+                Rate.adults == adults,
+                Rate.rooms == rooms,
+            )
+            .with_for_update()
+        )
+    ).all()
+    for current in current_rates:
+        captured = current.captured_at
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+        if current.offer_key in seen or captured > observed_at:
+            continue
+        current.availability = False
+        current.cash_price = None
+        current.tax = None
+        current.total_price = None
+        current.points_price = None
+        current.captured_at = observed_at

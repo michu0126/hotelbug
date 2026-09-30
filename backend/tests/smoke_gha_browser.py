@@ -44,7 +44,8 @@ async def main():
                 await page.locator(".tid-selectBtn:visible").count(),
                 flush=True,
             )
-            print("page_excerpt=", (await page.locator("body").inner_text())[:1800], flush=True)
+            excerpt = (await page.locator("body").inner_text())[:1800]
+            print("page_excerpt=", excerpt.encode("ascii", "backslashreplace").decode(), flush=True)
         raise
     finally:
         await provider.close()

@@ -167,6 +167,23 @@ class CrawlJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class StayScan(Base):
+    __tablename__ = "stay_scans"
+    __table_args__ = (
+        UniqueConstraint("hotel_id", "check_in", "check_out", "adults", "rooms"),
+        Index("ix_stay_scans_hotel_date", "hotel_id", "check_in"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    hotel_id: Mapped[str] = mapped_column(ForeignKey("hotels.id"))
+    check_in: Mapped[date] = mapped_column(Date)
+    check_out: Mapped[date] = mapped_column(Date)
+    adults: Mapped[int] = mapped_column(Integer)
+    rooms: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    job_id: Mapped[str] = mapped_column(String(36))
+
+
 class ProviderStatus(Base):
     __tablename__ = "provider_status"
     provider: Mapped[str] = mapped_column(String(32), primary_key=True)

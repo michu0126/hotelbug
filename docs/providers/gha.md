@@ -13,6 +13,7 @@ DOM 中 `.tid-selectBtn` 的三层父节点包含计划标题 h5、价格 h5、�
 离线测试覆盖日期、人数、酒店 URL、会员排除、税费、币种和公开方案价。仍需验证其他品牌、跨年日期的页面格式、精确总价/条款及全量目录，不能据少数酒店样本声明 GHA 全量完成。
 
 2026-09-30 跨地区实测：官网目录候选页成功确认 Erbil Rotana（伊拉克，hotelId 238788）、Viceroy Santa Monica（美国，5149）、The Leela Hyderabad（印度，196125）的酒店身份。Viceroy Santa Monica 2026-10-08/09 页面有售罄房型的禁用 VIEW RATES 按钮；原采集器误点击并超时，已改为只点可用按钮。该酒店非会员房型起价 USD 543，但可见的 Best Flexible Rate 含税报价为 USD 574/night；旧的“方案价必须等于起价”条件会丢掉全部公开方案。修正后读到 34 条公开报价，最低示例 Best Flexible Rate USD 574。Erbil Rotana 同日期读到 18 条，公开 Flexible Rate 起价 USD 217。另用隔离数据库从 Viceroy 官网详情页发现酒店，Worker 查价并写入 34 条 PriceHistory，任务 SUCCEEDED、Provider ONLINE。以上均为测试时的页面价格，不代表现在仍可预订或全目录已验收。
+同一 Erbil Rotana 在 2027-09-28/29（仍处监控的一年范围内）页面明确显示 `Selection not available for these dates`，无房型列表。原脚本等待按钮 30 秒后误报 TIMEOUT；现在识别此官网状态并返回空报价，不入库零价，也不视作页面故障。隔离 Worker 的正式任务复测为 SUCCEEDED、PriceHistory 0、Provider ONLINE；同酒店 2026-10-08/09 的 18 条报价复测仍正常。
 
 ### 自动目录接入
 

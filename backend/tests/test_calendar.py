@@ -1,11 +1,13 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy import func, select
 from test_domain import fixture_rate
 
+from app.models.tables import PriceHistory, Rate, StayScan, utcnow
 from app.schemas.domain import HotelData
 from app.services.calendar import get_calendar, month_dates
-from app.services.rates import persist_rates, upsert_hotel
+from app.services.rates import finalize_stay_scan, persist_rates, upsert_hotel
 
 
 async def test_calendar_uses_same_offer_history_and_missing_days(sessions):
@@ -50,3 +52,68 @@ def test_calendar_month_validation():
             pass
         else:
             raise AssertionError(f"accepted {bad}")
+
+
+async def test_empty_successful_scan_hides_stale_price_and_keeps_history(sessions):
+    async with sessions() as db, db.begin():
+        hotel = await upsert_hotel(
+            db,
+            HotelData(
+                provider="marriott",
+                provider_hotel_id="fixture-only",
+                hotel_name="Fixture hotel",
+                default_currency="USD",
+                official_url="https://www.marriott.com/",
+            ),
+        )
+        rate = fixture_rate()
+        await persist_rates(db, hotel, [rate], "priced-job")
+        await finalize_stay_scan(
+            db, hotel, rate.check_in, rate.check_out, rate.adults, rate.rooms, [rate], "priced-job"
+        )
+        assert (await get_calendar(db, hotel, "2027-01"))["days"][6]["status"] == "AVAILABLE"
+
+        await finalize_stay_scan(
+            db, hotel, rate.check_in, rate.check_out, rate.adults, rate.rooms, [], "empty-job"
+        )
+        day = (await get_calendar(db, hotel, "2027-01"))["days"][6]
+        assert day == {"date": "2027-01-07", "status": "UNAVAILABLE"}
+        current = await db.scalar(select(Rate))
+        assert not current.availability and current.total_price is None
+        assert await db.scalar(select(func.count()).select_from(PriceHistory)) == 1
+        assert (await db.scalar(select(StayScan))).status == "UNAVAILABLE"
+
+        renewed = rate.model_copy(
+            update={
+                "captured_at": utcnow() + timedelta(seconds=1),
+                "cash_price": None,
+                "tax": None,
+                "total_price": Decimal("90"),
+            }
+        )
+        await persist_rates(db, hotel, [renewed], "renewed-job")
+        await finalize_stay_scan(
+            db, hotel, rate.check_in, rate.check_out, rate.adults, rate.rooms, [renewed], "renewed-job"
+        )
+        restored = (await get_calendar(db, hotel, "2027-01"))["days"][6]
+        assert restored["status"] == "AVAILABLE"
+        assert Decimal(restored["current_low"]) == Decimal("90")
+
+
+async def test_first_scan_without_rooms_is_distinct_from_no_data(sessions):
+    async with sessions() as db, db.begin():
+        hotel = await upsert_hotel(
+            db,
+            HotelData(
+                provider="gha",
+                provider_hotel_id="fixture-only",
+                hotel_name="Fixture hotel",
+                official_url="https://www.ghadiscovery.com/example/hotel",
+            ),
+        )
+        rate = fixture_rate()
+        assert (await get_calendar(db, hotel, "2027-01"))["days"][6]["status"] == "NO_DATA"
+        await finalize_stay_scan(
+            db, hotel, rate.check_in, rate.check_out, rate.adults, rate.rooms, [], "empty-job"
+        )
+        assert (await get_calendar(db, hotel, "2027-01"))["days"][6]["status"] == "UNAVAILABLE"

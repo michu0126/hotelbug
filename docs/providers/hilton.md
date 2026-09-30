@@ -8,3 +8,4 @@
 Endpoint/Method/Payload/Headers/Cookie/Token/价格税费及积分字段均未验证。
 目录可读与报价可读分别记录；积分和现金分开保存。
 2026-09-30：英文 sitemap 索引 `/sitemap/en/sitemap-en.xml` 返回 200，包含 989 个子地图，其中 542 个路径含 `prop`；首个酒店子地图 `sitemap-en-prop-hp-001.xml` 返回 200、107 条 URL，包含酒店主页与 gallery/rooms 等子页。Hampton Aachen Tivoli 酒店主页浏览器返回 200，显示酒店名称和日期、人数、Check prices 控件；在下一次操作前页面转入 `Hilton Page Reference Code` 错误页，尚未拿到可比较报价。目录虽能用于发现候选酒店，不能证明查价功能已完成。探测脚本已扩展 `--property-url` 参数。
+另一家 sitemap 酒店 Hampton Inn & Suites Kutztown（ABEKZHX）主页和 rooms 介绍页也返回 200，主页日期/人数/Check prices 控件可见。正常点击 2026-10-07/08 的日期并提交 Check prices 后打开官方 `/en/book/reservation/rooms/?ctyhocn=ABEKZHX&arrivalDate=2026-10-07&departureDate=2026-10-08...`，但落到 Hilton Page Reference Code 错误页，无房型报价；不带代理的全新浏览器会话也在同一阶段转入错误页。不能把主页 200 当作报价成功，也暂不能判断是会话、路由还是站点策略导致。
