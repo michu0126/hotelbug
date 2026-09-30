@@ -38,6 +38,21 @@ def accor_browser() -> HotelProvider:
     )
 
 
+def hilton_browser() -> HotelProvider:
+    try:
+        from app.providers.hilton_browser import HiltonBrowserProvider
+    except ImportError as exc:
+        raise ProviderError(
+            ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
+        ) from exc
+    settings = get_settings()
+    return HiltonBrowserProvider(
+        proxy_server=settings.browser_proxy_url.get_secret_value() or None,
+        browser_channel=settings.browser_channel or None,
+        session_dir=settings.browser_session_dir,
+    )
+
+
 def gha_browser() -> HotelProvider:
     try:
         from app.providers.gha_browser import GHABrowserProvider
@@ -57,6 +72,7 @@ FACTORIES: dict[str, Callable[[], HotelProvider]] = {
     "marriott": marriott_browser,
     "accor": accor_browser,
     "gha": gha_browser,
+    "hilton": hilton_browser,
 }
 
 

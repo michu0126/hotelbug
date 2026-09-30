@@ -259,6 +259,33 @@ class MarriottBrowserProvider(HotelProvider):
             await page.wait_for_timeout(500)
         if await page.locator('a[href*="roomPoolCode="]').count():
             raise ProviderError(ErrorCode.TIMEOUT, "Marriott room results did not update for selected dates")
+        raise ProviderError(
+            ErrorCode.PROVIDER_CHANGED,
+            "Marriott room results are missing; no availability has not been confirmed",
+        )
+
+    async def _collect_rates(self, page: Page, search: RateRequest) -> list[RateData]:
+        if not await page.locator('a[href*="roomPoolCode="]').count():
+            raise ProviderError(
+                ErrorCode.PROVIDER_CHANGED,
+                "Marriott room results are missing; no availability has not been confirmed",
+            )
+        await page.get_by_role("checkbox", name="Show with taxes and fees").check()
+        rooms = page.locator("div.drop-shadow").filter(has=page.locator('a[href*="roomPoolCode="]'))
+        result = []
+        for index in range(await rooms.count()):
+            room = rooms.nth(index)
+            button = room.get_by_role("button", name="View Rates")
+            if await button.count():
+                await button.click()
+            await room.locator(".rate-card-content").first.wait_for(timeout=15000)
+            result.extend(parse_room_page(await room.inner_html(), search))
+        if not result:
+            raise ProviderError(
+                ErrorCode.PROVIDER_CHANGED,
+                "Marriott page contains no verifiable public tax-inclusive quotes",
+            )
+        return result
 
     async def search_hotels(self, query: dict) -> list[HotelData]:
         code = query.get("provider_hotel_id")
@@ -290,19 +317,7 @@ class MarriottBrowserProvider(HotelProvider):
         try:
             page = await self._open_hotel(search.provider_hotel_id)
             await self._set_search(page, search)
-            if not await page.locator('a[href*="roomPoolCode="]').count():
-                return []
-            await page.get_by_role("checkbox", name="Show with taxes and fees").check()
-            rooms = page.locator("div.drop-shadow").filter(has=page.locator('a[href*="roomPoolCode="]'))
-            result = []
-            for index in range(min(await rooms.count(), 8)):
-                room = rooms.nth(index)
-                button = room.get_by_role("button", name="View Rates")
-                if await button.count():
-                    await button.click()
-                await room.locator(".rate-card-content").first.wait_for(timeout=15000)
-                result.extend(parse_room_page(await room.inner_html(), search))
-            return result
+            return await self._collect_rates(page, search)
         except PlaywrightTimeout as exc:
             if self._page:
                 await self._check_access(self._page, None)

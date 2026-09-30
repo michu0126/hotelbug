@@ -13,7 +13,7 @@ from app.database.session import Session
 from app.models.tables import CrawlJob, ProviderStatus, utcnow
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
-from app.services.catalogs import discover_accor, discover_gha
+from app.services.catalogs import discover_accor, discover_gha, discover_hilton
 from app.services.jobs import enqueue
 from app.services.notifications import deliver_one
 from app.services.queue import Queue
@@ -74,7 +74,7 @@ async def tick(sessions: async_sessionmaker, queue: Queue, settings: Settings) -
                 await queue.put(job.id, job.priority)
                 job.status = "QUEUED"
                 dispatched += 1
-            # Only verified registered providers receive automatic health checks.
+            # Registered adapters receive low-frequency real quote health checks.
             for provider in FACTORIES:
                 if not settings.provider_policy(provider).enabled:
                     continue
@@ -117,7 +117,8 @@ async def main() -> None:
     try:
         while True:
             try:
-                discovery = (discover_accor, discover_gha)[catalog_turn % 2]
+                catalogs = (discover_accor, discover_gha, discover_hilton)
+                discovery = catalogs[catalog_turn % len(catalogs)]
                 catalog_turn += 1
                 await discovery(Session, queue, settings, catalog_client)
                 await tick(Session, queue, settings)

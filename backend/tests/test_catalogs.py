@@ -4,7 +4,14 @@ from sqlalchemy import func, select
 
 from app.core.config import Settings
 from app.models.tables import AppSetting, CrawlJob
-from app.services.catalogs import accor_codes, discover_accor, discover_gha, gha_links
+from app.services.catalogs import (
+    accor_codes,
+    discover_accor,
+    discover_gha,
+    discover_hilton,
+    gha_links,
+    hilton_links,
+)
 
 
 def sitemap(codes):
@@ -130,3 +137,77 @@ async def test_gha_missing_map_does_not_block_later_maps(sessions, queue, monkey
             assert state.value["missing_maps"] == [root + "/sitemap-4.xml"]
             state.value = {**state.value, "next_fetch_at": 0}
         assert await discover_gha(sessions, queue, Settings(), client) == 1
+
+
+def test_hilton_sitemap_only_keeps_property_homepages_and_property_maps():
+    root = "https://www.hilton.com"
+    assert hilton_links(
+        gha_map(
+            [
+                root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/",
+                root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/rooms/",
+                root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/gallery/",
+                root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/?ref=marketing",
+                "https://example.com/en/hotels/aahhxhx-hampton-aachen-tivoli/",
+            ]
+        )
+    ) == [root + "/en/hotels/aahhxhx-hampton-aachen-tivoli"]
+    assert hilton_links(
+        gha_map(
+            [
+                root + "/sitemap/en/sitemap-en-prop-hp-001.xml",
+                root + "/sitemap/en/sitemap-en-location-001.xml",
+                root + "/sitemap/en/sitemap-en-prop-hp-001.xml",
+            ]
+        ),
+        index=True,
+    ) == [root + "/sitemap/en/sitemap-en-prop-hp-001.xml"]
+
+
+async def test_hilton_catalog_resumes_deduplicates_and_does_not_fake_hotels(sessions, queue, monkeypatch):
+    monkeypatch.setenv("HILTON_ENABLED", "true")
+    root = "https://www.hilton.com"
+    calls = []
+    urls = {
+        "/sitemap/en/sitemap-en.xml": [
+            root + "/sitemap/en/sitemap-en-prop-hp-001.xml",
+            root + "/sitemap/en/sitemap-en-prop-hp-002.xml",
+        ],
+        "/sitemap/en/sitemap-en-prop-hp-001.xml": [
+            root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/",
+            root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/rooms/",
+        ],
+        "/sitemap/en/sitemap-en-prop-hp-002.xml": [
+            root + "/en/hotels/aahhxhx-hampton-aachen-tivoli/",
+            root + "/en/hotels/abekzhx-hampton-suites-kutztown/",
+        ],
+    }
+
+    def respond(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, content=gha_map(urls[request.url.path]))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        for expected in (0, 1, 1, 0):
+            assert await discover_hilton(sessions, queue, Settings(), client) == expected
+            async with sessions() as session, session.begin():
+                state = await session.get(AppSetting, "catalog:hilton")
+                state.value = {**state.value, "next_fetch_at": 0}
+    assert calls == list(urls)
+    async with sessions() as session:
+        from app.models.tables import Hotel
+
+        assert await session.scalar(select(func.count()).select_from(Hotel)) == 0
+        jobs = (await session.scalars(select(CrawlJob))).all()
+        assert len(jobs) == 2
+        assert all(job.provider == "hilton" and job.payload.get("official_url") for job in jobs)
+
+
+async def test_hilton_catalog_disabled_sends_no_requests(sessions, queue, monkeypatch):
+    monkeypatch.setenv("HILTON_ENABLED", "false")
+
+    def respond(_request):
+        raise AssertionError("Disabled Hilton catalog made a request")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        assert await discover_hilton(sessions, queue, Settings(), client) == 0

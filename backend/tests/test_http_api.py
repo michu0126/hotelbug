@@ -49,7 +49,16 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert (await client.get("/api/health/live")).status_code == 200
             states = (await client.get("/api/providers")).json()
             assert len(states) == 6
-            assert [s["provider"] for s in states if s["implemented"]] == ["marriott", "accor", "gha"]
+            assert [s["provider"] for s in states if s["implemented"]] == [
+                "marriott",
+                "hilton",
+                "accor",
+                "gha",
+            ]
+            assert (
+                next(s for s in states if s["provider"] == "hilton")["verification"]
+                == "PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED"
+            )
             assert not any(s["enabled"] for s in states)
             result = await client.post(
                 "/api/hotels",

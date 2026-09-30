@@ -203,6 +203,7 @@ async def providers(db: Db):
             "marriott": "BROWSER_OBSERVED_HTTP_UNVERIFIED",
             "accor": "PUBLIC_PAGE_SAMPLE_VERIFIED",
             "gha": "PUBLIC_PAGE_SAMPLE_VERIFIED",
+            "hilton": "PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED",
         }.get(name, "NOT_IMPLEMENTED")
         total = item["success_count"] + item["failure_count"]
         item["success_rate"] = item["success_count"] / total if total else None

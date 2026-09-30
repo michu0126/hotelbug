@@ -163,3 +163,54 @@ async def test_delayed_access_denied_is_not_reported_as_timeout(monkeypatch):
         await provider.search_rates(request)
 
     assert exc.value.code == ErrorCode.BLOCKED_BY_ANTIBOT
+
+
+def quote_page(*, room_count=1, missing=False, html=None):
+    room = MagicMock()
+    room.inner_html = AsyncMock(return_value=room_html() if html is None else html)
+    button = MagicMock()
+    button.count = AsyncMock(return_value=1)
+    button.click = AsyncMock()
+    room.get_by_role.return_value = button
+    room.locator.return_value.first.wait_for = AsyncMock()
+    rooms = MagicMock()
+    rooms.count = AsyncMock(return_value=room_count)
+    rooms.nth.return_value = room
+    links = MagicMock()
+    links.count = AsyncMock(return_value=0 if missing else room_count)
+    page = MagicMock()
+    page.locator.side_effect = lambda selector: (
+        links if selector.startswith("a[") else SimpleNamespace(filter=lambda **_: rooms)
+    )
+    page.get_by_role.return_value.check = AsyncMock()
+    return page, rooms, room
+
+
+@pytest.mark.asyncio
+async def test_all_rooms_are_read_not_only_first_eight():
+    provider = MarriottBrowserProvider()
+    page, rooms, room = quote_page(room_count=9)
+    request = RateRequest(provider_hotel_id="NYCMQ", check_in=date(2026, 10, 7), check_out=date(2026, 10, 8))
+    rates = await provider._collect_rates(page, request)
+    assert len(rates) == 9
+    assert rooms.nth.call_args_list == [call(index) for index in range(9)]
+    assert room.inner_html.await_count == 9
+
+
+@pytest.mark.asyncio
+async def test_missing_room_results_are_not_reported_as_no_availability():
+    page, _, _ = quote_page(missing=True)
+    request = RateRequest(provider_hotel_id="NYCMQ", check_in=date(2026, 10, 7), check_out=date(2026, 10, 8))
+    with pytest.raises(ProviderError) as exc:
+        await MarriottBrowserProvider()._collect_rates(page, request)
+    assert exc.value.code == ErrorCode.PROVIDER_CHANGED
+    page.get_by_role.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_quotes_do_not_create_successful_empty_result():
+    page, _, _ = quote_page(html=room_html().replace("Non-Member Rate", "Unreadable Rate"))
+    request = RateRequest(provider_hotel_id="NYCMQ", check_in=date(2026, 10, 7), check_out=date(2026, 10, 8))
+    with pytest.raises(ProviderError) as exc:
+        await MarriottBrowserProvider()._collect_rates(page, request)
+    assert exc.value.code == ErrorCode.PROVIDER_CHANGED

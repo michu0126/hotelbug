@@ -14,8 +14,8 @@
 | 2 | 只实现 Marriott，搜索/详情/房价/历史/日历 | 进行中：浏览器官网真报价请求/字段已验证，解析器/历史/日历/单酒店Watchlist已开发；独立HTTP及NAS仍未验收，全球批量发现未完成 |
 | 3 | 中位数基线、评分、历史低价、二次确认、通知 | 已实现同报价历史每日中位数、50%降幅、复查任务及Telegram持久化发送；模拟服务集成测试通过，真实机器人投递待验证 |
 | 4 | Vue 完整业务 Dashboard / 搜索 / 日历 / 趋势 / 配置 | 待开始；Phase 1 仅提供真实基础状态页 |
-| 5 | Hilton / Hyatt / IHG 独立适配 | 待开始 |
-| 6 | Accor / GHA 独立适配 | 待开始；旧版 GHA 样本仅作研究证据 |
+| 5 | Hilton / Hyatt / IHG 独立适配 | 希尔顿官网目录、页面适配与 Worker 已接入，离线链路通过；独立浏览器实采403，IHG/Hyatt适配仍未完成 |
+| 6 | Accor / GHA 独立适配 | 页面适配与全球目录已接入；多酒店真实 Worker 任务通过，全球酒店和NAS采价仍未全量验收 |
 | 7 | 缓存、优先级、公平性、压测、运行监控 | 待开始 |
 
 ## 架构与目录
@@ -32,7 +32,7 @@ backend/tests                 fixture/单元/集成测试
 frontend/                     Vue 3 + Vite（不是原 Next.js）
 docs/providers/               六集团证据、未知项和研究路线
 docker/                       Nginx、保留的旧版部署配置
-Dockerfile                    api / frontend 两个构建目标
+Dockerfile                    api / frontend / worker 三个构建目标
 docker-compose.yml            六服务部署
 ```
 
@@ -118,9 +118,9 @@ amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 | Marriott | 官网正常表单实测 2026-10-07/08、NYCMQ，酒店列表和55条房型报价200；详情、报价GraphQL均已记录 | 独立HTTP首页403、报价POST连接失败；NAS出口验收，不能把浏览器成功等同自动采集成功；阻塞时标BLOCKED/DEGRADED |
 | IHG | robots可读，旧redirect样本403 | 从集团官网实际搜索流程抓取请求；先证实日期、品牌、税费，不直接沿用旧URL |
 | Hyatt | robots429，房价页403/E6020 | 暂停并记录；正常访问恢复后研究公开请求，无绕过 |
-| Hilton | sitemap可读，房价页403 | 同上；不把目录可读视作房价可用 |
-| Accor | 尚无实测 | Phase6先研究all.accor.com真实搜索，再实现 |
-| GHA | 官网页面及其自行发出的 /api/v3/booking/hotel/rooms/rates 曾有成功样本 | Phase6验证真实请求上下文与更多品牌；否则沿用独立页面策略，不提前推广全量 |
+| Hilton | 普通Chrome真实含税公开价和稳定房型/方案ID已验证；542个酒店子地图目录已接入，独立浏览器仍403 | 页面适配器与Worker已注册；继续解决独立会话访问与NAS实采，不能把离线入库或目录可读当成实采成功 |
+| Accor | 多酒店真实官网任务已入库，近一年上限日期可查；延迟Cookie弹窗遮挡脚本问题已修正 | 全球目录逐一验证、Linux/NAS真实查价和稳定性验收 |
+| GHA | 多品牌/多地区公开含税方案已入库；明确无房日期可标UNAVAILABLE，重启保留专用浏览器状态 | 全球目录逐一验证、Linux/NAS真实查价与更多品牌格式 |
 
 研究细节保存 docs/providers；证据中的动态 Cookie/Authorization不保存。旧测试结果仅代表2026-09-27开发机，不代表NAS当前出口。
 
