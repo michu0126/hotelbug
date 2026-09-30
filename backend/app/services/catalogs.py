@@ -101,13 +101,18 @@ async def discover_gha(sessions, queue, settings, client) -> int:
             pending = await session.scalar(
                 select(func.count()).select_from(CrawlJob).where(CrawlJob.status.in_(LIVE))
             )
-            budget = min(10, max(0, settings.max_pending_jobs - pending))
+            budget = min(settings.catalog_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
             cursor = data.get("cursor", 0)
             selected = data.get("urls", [])[cursor : cursor + budget]
             for url in selected:
                 await enqueue(
                     session,
-                    JobInput(provider="gha", kind=JobKind.DISCOVER_HOTELS, payload={"official_url": url}),
+                    JobInput(
+                        provider="gha",
+                        kind=JobKind.DISCOVER_HOTELS,
+                        priority=90,
+                        payload={"official_url": url},
+                    ),
                 )
             state.value = {**data, "cursor": cursor + len(selected)}
             return len(selected)
@@ -166,13 +171,16 @@ async def discover_accor(sessions, queue, settings, client) -> int:
             pending = await session.scalar(
                 select(func.count()).select_from(CrawlJob).where(CrawlJob.status.in_(LIVE))
             )
-            budget = min(10, max(0, settings.max_pending_jobs - pending))
+            budget = min(settings.catalog_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
             selected = codes[cursor : cursor + budget]
             for code in selected:
                 await enqueue(
                     session,
                     JobInput(
-                        provider="accor", kind=JobKind.DISCOVER_HOTELS, payload={"provider_hotel_id": code}
+                        provider="accor",
+                        kind=JobKind.DISCOVER_HOTELS,
+                        priority=90,
+                        payload={"provider_hotel_id": code},
                     ),
                 )
             if state is not None:

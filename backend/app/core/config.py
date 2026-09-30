@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     alert_confirmation_seconds: int = Field(default=60, ge=5, le=3600)
     global_monitoring_enabled: bool = True
     global_jobs_per_tick: int = Field(default=20, ge=1, le=500)
+    catalog_jobs_per_tick: int = Field(default=1, ge=1, le=20)
     max_pending_jobs: int = Field(default=2000, ge=20, le=100000)
     browser_proxy_url: SecretStr = SecretStr("")
     browser_channel: str = ""

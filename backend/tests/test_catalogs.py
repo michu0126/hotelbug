@@ -34,7 +34,9 @@ async def test_catalog_resume_and_no_placeholder_hotels(sessions, queue, monkeyp
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         for expected in (10, 10, 3, 0):
-            assert await discover_accor(sessions, queue, Settings(), client) == expected
+            assert (
+                await discover_accor(sessions, queue, Settings(catalog_jobs_per_tick=10), client) == expected
+            )
     assert len(calls) == 1
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(CrawlJob)) == 23

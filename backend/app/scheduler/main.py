@@ -113,11 +113,13 @@ async def main() -> None:
         follow_redirects=True,
         proxy=settings.browser_proxy_url.get_secret_value() or None,
     )
+    catalog_turn = 0
     try:
         while True:
             try:
-                await discover_accor(Session, queue, settings, catalog_client)
-                await discover_gha(Session, queue, settings, catalog_client)
+                discovery = (discover_accor, discover_gha)[catalog_turn % 2]
+                catalog_turn += 1
+                await discovery(Session, queue, settings, catalog_client)
                 await tick(Session, queue, settings)
                 await deliver_one(Session, settings, telegram_client)
                 await redis.set("hotelbug:heartbeat:scheduler", utcnow().isoformat(), ex=60)
