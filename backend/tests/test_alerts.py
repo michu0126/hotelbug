@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from test_domain import fixture_rate
 from test_pipeline import FixtureProvider
 
-from app.api.main import app
+from app.api.main import app, telegram_http_client
 from app.api.main import settings as api_settings
 from app.core.config import Settings
 from app.core.logging import redact
@@ -185,3 +185,43 @@ async def test_ui_saved_telegram_config_is_used_for_delivery(sessions, monkeypat
     assert len(requests) == 1
     assert "ui-test-token" in str(requests[0].url)
     assert json.loads(requests[0].content)["chat_id"] == "987"
+
+
+async def test_manual_telegram_message_uses_saved_config_and_reports_delivery(sessions, monkeypatch):
+    monkeypatch.setattr(api_settings, "admin_token", SecretStr("admin-test"))
+    sent = []
+
+    async def database():
+        async with sessions() as session:
+            yield session
+
+    def respond(request):
+        sent.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    async def telegram():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            yield client
+
+    app.dependency_overrides[get_session] = database
+    app.dependency_overrides[telegram_http_client] = telegram
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+            headers = {"authorization": "Bearer admin-test"}
+            assert (await api.post("/api/settings/telegram/test", headers=headers)).status_code == 422
+            assert (await api.post("/api/settings/telegram/test")).status_code == 401
+            saved = await api.put(
+                "/api/settings/telegram",
+                headers=headers,
+                json={"bot_token": "saved-test-token", "chat_id": "987", "enabled": False},
+            )
+            assert saved.status_code == 200
+            response = await api.post("/api/settings/telegram/test", headers=headers)
+            assert response.status_code == 200 and response.json() == {"delivered": True}
+            assert "saved-test-token" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+    assert len(sent) == 1
+    assert "saved-test-token" in str(sent[0].url)
+    assert json.loads(sent[0].content)["chat_id"] == "987"
+    assert "测试消息" in json.loads(sent[0].content)["text"]

@@ -57,7 +57,7 @@ docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --build
 并发、请求间隔、任务超时、调度周期见 .env.example。每个Provider有独立Redis锁/限流键，默认同一Provider并发1、间隔5秒。
 最大任务重试3次、指数退避+jitter。403/挑战暂停6小时，429至少暂停1小时且不早于Retry-After。
 任务租约超过执行超时60秒；崩溃任务可恢复，重复崩溃达到上限后终止。
-Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID 环境变量。有效报价入库后比较同一酒店、日期、房型、房价方案、币种和住客条件的历史每日中位数；至少 3 个历史观察日，默认降幅达到 50% 后排入复查，60 秒后重新采集仍满足条件才生成通知。发送失败持久化重试，429 遵守 Telegram retry_after。Bark/Webhook 尚未实现。
+Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID 环境变量。保存后可点击“发送测试消息”，立即核对 Bot Token、Chat ID 和当前网络出口；该按钮只发一条测试消息，不创建降价提醒，即使自动通知暂时关闭也可使用。有效报价入库后比较同一酒店、日期、房型、房价方案、币种和住客条件的历史每日中位数；至少 3 个历史观察日，默认降幅达到 50% 后排入复查，60 秒后重新采集仍满足条件才生成通知。发送失败持久化重试，429 遵守 Telegram retry_after。Bark/Webhook 尚未实现。
 
 雅高采集启用 `ACCOR_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
 

@@ -3,7 +3,7 @@ import {computed,onMounted,onUnmounted,ref,watch} from 'vue';
 const status=ref(null),providers=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
 const error=ref(''),actionMessage=ref(''),loading=ref(false),actionBusy=ref(false);
 const adminToken=ref(''),propertyCode=ref('0338'),selectedProvider=ref('accor'),hotelId=ref(''),daysAhead=ref(365);
-const telegramBotToken=ref(''),telegramChatId=ref(''),telegramConfigured=ref(false),telegramEnabled=ref(true),telegramMessage=ref('');
+const telegramBotToken=ref(''),telegramChatId=ref(''),telegramConfigured=ref(false),telegramEnabled=ref(true),telegramDirty=ref(false),telegramMessage=ref('');
 const today=new Date(),month=ref(`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`);
 let timer;
 async function api(path,options={}){
@@ -65,8 +65,16 @@ async function saveTelegram(){
       body:JSON.stringify({bot_token:telegramBotToken.value||null,chat_id:telegramChatId.value.trim(),enabled:telegramEnabled.value})});
     telegramConfigured.value=result.configured;
     telegramBotToken.value='';
+    telegramDirty.value=false;
     telegramMessage.value=result.configured?'Telegram 设置已保存，确认降价后会使用此机器人发送。':'已保存 Chat ID；仍需填写机器人 Token。';
   }catch(e){telegramMessage.value=e.message;}finally{actionBusy.value=false;}
+}
+async function testTelegram(){
+  actionBusy.value=true;telegramMessage.value='';
+  try{
+    await api('/settings/telegram/test',{method:'POST',headers:{authorization:`Bearer ${adminToken.value}`},signal:AbortSignal.timeout(25000)});
+    telegramMessage.value='测试消息已由 Telegram 接收，请查看目标聊天。';
+  }catch(e){telegramMessage.value=`测试发送失败：${e.message}`;}finally{actionBusy.value=false;}
 }
 async function loadTelegramSettings(){
   if(!adminToken.value)return;
@@ -75,6 +83,7 @@ async function loadTelegramSettings(){
     telegramChatId.value=saved.chat_id||'';
     telegramConfigured.value=saved.configured;
     telegramEnabled.value=saved.enabled;
+    telegramDirty.value=false;
   }catch(e){telegramMessage.value=e.message;}
 }
 const names={marriott:'万豪',ihg:'IHG',hilton:'希尔顿',hyatt:'凯悦',accor:'雅高',gha:'GHA'};
@@ -99,7 +108,7 @@ onUnmounted(()=>clearInterval(timer));
       <p v-else-if="!hotels.length" class="empty">尚未收录酒店。</p>
     </section>
     <section class="panel"><h2>降价提醒</h2><p v-if="!alerts.length" class="empty">暂无降价事件。积累历史报价后自动比较并复查。</p><div class="table" v-else><table><thead><tr><th>酒店 / 集团</th><th>入住日期</th><th>当前价格</th><th>历史基准</th><th>复查结果</th></tr></thead><tbody><tr v-for="a in alerts" :key="a.id"><td>{{a.payload.hotel_name}} · {{names[a.payload.provider]}}</td><td>{{a.payload.check_in}}</td><td>{{a.payload.price}} {{a.payload.currency}}</td><td>{{a.payload.baseline}} {{a.payload.currency}}</td><td>{{a.confirmed?'已确认':a.payload.verification==='REJECTED'?'价格已变化':'待复查'}}</td></tr></tbody></table></div></section>
-    <section class="panel"><h2>Telegram 通知设置</h2><p class="muted">填写上面的管理令牌后保存；机器人 Token 留空表示保留已保存的值。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveTelegram">保存 Telegram 设置</button><small>{{telegramConfigured?'已配置':'尚未在此页面保存'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
+    <section class="panel"><h2>Telegram 通知设置</h2><p class="muted">填写上面的管理令牌后保存；机器人 Token 留空表示保留已保存的值。保存后可手动发送一条测试消息。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token" @input="telegramDirty=true"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID" @input="telegramDirty=true"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveTelegram">保存 Telegram 设置</button><button :disabled="actionBusy||!telegramConfigured||telegramDirty" @click="testTelegram">发送测试消息</button><small>{{telegramConfigured?'已配置':'尚未在此页面保存'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
     <section class="panel"><h2>后台服务</h2><p>Worker 心跳：{{when(status?.worker_heartbeat)}}</p><p>Scheduler 心跳：{{when(status?.scheduler_heartbeat)}}</p><small>心跳只表示进程在线。请以 Provider 状态和实际报价为准。</small></section>
     <section class="panel"><h2>Provider 状态</h2><div class="providers"><article v-for="p in providers" :key="p.provider"><h3>{{names[p.provider]}}</h3><span class="badge">{{p.implemented?(p.enabled?p.status:'默认关闭 · '+p.status):'待研究 / 尚未实现'}}</span><p>{{p.last_error||p.verification}}</p><small>今日任务 {{p.requests_today||0}} · 成功 {{p.success_count||0}}</small></article></div></section>
     <section class="panel"><h2>最近任务</h2><p v-if="!jobs.length" class="empty">暂无任务。</p><div class="table" v-else><table><thead><tr><th>集团</th><th>类型</th><th>状态</th><th>计划时间</th><th>错误</th></tr></thead><tbody><tr v-for="j in jobs" :key="j.id"><td>{{names[j.provider]}}</td><td>{{j.kind}}</td><td>{{j.status}}</td><td>{{when(j.scheduled_at)}}</td><td>{{j.error_type||'—'}}</td></tr></tbody></table></div></section>

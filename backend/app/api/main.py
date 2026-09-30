@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from hmac import compare_digest
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
@@ -44,6 +45,19 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="Hotel Bug Price Monitor", version="2.0.0-phase2-preview", lifespan=lifespan)
 Db = Annotated[AsyncSession, Depends(get_session)]
+
+
+async def telegram_http_client():
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        proxy=settings.telegram_proxy_url.get_secret_value()
+        or settings.browser_proxy_url.get_secret_value()
+        or None,
+    ) as client:
+        yield client
+
+
+TelegramClient = Annotated[httpx.AsyncClient, Depends(telegram_http_client)]
 
 
 def admin(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -97,6 +111,36 @@ async def put_telegram_settings(data: TelegramSettingsInput, db: Db):
         "chat_id": values["chat_id"],
         "enabled": values["enabled"],
     }
+
+
+@app.post("/api/settings/telegram/test", dependencies=[Depends(admin)])
+async def test_telegram_settings(db: Db, client: TelegramClient):
+    row = await db.get(AppSetting, "telegram")
+    token = (row.value.get("bot_token") if row else None) or settings.telegram_bot_token.get_secret_value()
+    chat_id = (row.value.get("chat_id") if row else None) or settings.telegram_chat_id
+    if not token or not chat_id:
+        raise HTTPException(422, "Save a Telegram Bot Token and Chat ID first")
+    try:
+        response = await client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": "Hotel Bug Price Monitor：这是一条手动测试消息。",
+                "link_preview_options": {"is_disabled": True},
+            },
+            timeout=15,
+        )
+        result = response.json()
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(502, "Telegram test request failed") from None
+    if not response.is_success or not isinstance(result, dict) or result.get("ok") is not True:
+        code = (
+            result.get("error_code", response.status_code)
+            if isinstance(result, dict)
+            else response.status_code
+        )
+        raise HTTPException(502, f"Telegram rejected test message (code {code})")
+    return {"delivered": True}
 
 
 @app.get("/api/health/live")
