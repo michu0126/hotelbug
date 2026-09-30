@@ -125,6 +125,8 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
 
 
 class GHABrowserProvider(AccorBrowserProvider):
+    session_provider = "gha"
+
     # Reuse only browser lifecycle; all provider operations below are GHA-specific.
     async def _open_booking(self, search: RateRequest):
         if search.rooms != 1 or (search.check_out - search.check_in).days != 1:

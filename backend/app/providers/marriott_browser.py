@@ -13,12 +13,13 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.base import HotelProvider
+from app.providers.browser_session import new_provider_page
 from app.providers.marriott import hotel_code
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
@@ -138,14 +139,13 @@ class MarriottBrowserProvider(HotelProvider):
         browser_channel: str | None = None,
         headless: bool = True,
         proxy_server: str | None = None,
+        session_dir: str | None = None,
     ):
         self._hotel_name = hotel_name
         self._browser_channel = browser_channel
         self._headless = headless
         self._proxy_server = proxy_server
-        self._playwright: Playwright | None = None
-        self._browser: Browser | None = None
-        self._context: BrowserContext | None = None
+        self._session_dir = session_dir
         self._page: Page | None = None
 
     def configure_hotel(self, hotel_name: str) -> None:
@@ -153,15 +153,13 @@ class MarriottBrowserProvider(HotelProvider):
 
     async def _get_page(self) -> Page:
         if self._page is None:
-            self._playwright = await async_playwright().start()
-            options = {"headless": self._headless}
-            if self._browser_channel:
-                options["channel"] = self._browser_channel
-            if self._proxy_server:
-                options["proxy"] = {"server": self._proxy_server}
-            self._browser = await self._playwright.chromium.launch(**options)
-            self._context = await self._browser.new_context(locale="en-US", timezone_id="Asia/Shanghai")
-            self._page = await self._context.new_page()
+            self._page = await new_provider_page(
+                "marriott",
+                proxy_server=self._proxy_server,
+                browser_channel=self._browser_channel,
+                headless=self._headless,
+                session_dir=self._session_dir,
+            )
             self._page.set_default_timeout(15000)
         return self._page
 
@@ -331,9 +329,6 @@ class MarriottBrowserProvider(HotelProvider):
         )
 
     async def close(self) -> None:
-        if self._context:
-            await self._context.close()
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        if self._page:
+            await self._page.close()
+            self._page = None

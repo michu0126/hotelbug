@@ -37,3 +37,5 @@ Worker 镜像需要 Chromium，已加入独立 worker 构建/发布目标并通�
 启动报 spawn UNKNOWN，故开发机实测使用安装版 Chrome；Linux Worker 镜像的浏览器启动已由 CI 验证，真实 NAS 网络抓价仍需单独验收。
 
 2026-09-30 追加抽查：官网目录代码 B3N7、C6M1 在 2026-10-08/09 均读到 4 条公开含税费方案。官网新加坡 Pullman Singapore Hill Street（B5L7）同日期读到 2 条；页面当时以 EUR 展示，按原样保存而不猜测本地币种。B5L7 在接近一年上限的 2027-09-28/29 仍读到 4 条真实报价。该远期日期的隔离 Worker 首次运行一度 TIMEOUT，再运行成功入库 4 条、Provider ONLINE；现有 Worker 会对 TIMEOUT 自动退避重试。以上证明这些样本与远期日期可查，不等于全部 5,899 个目录候选均有价。
+
+2026-09-30 会话复用回归发现实际脚本问题：先读酒店详情、关闭任务页、同集团下一任务继续查询时，延迟出现的 OneTrust Cookie 提示遮挡入住人数按钮。真实错误调用栈确认 `onetrust-consent-sdk` 拦截点击。现为每个新任务页注册官网 `Continue without Accepting` 控件处理，弹窗出现时正常点击关闭；未用强制点击或删除官网 DOM。隔离 Worker 的 B5L7 2026-10-20/21 最终成功写入 4 条报价、ONLINE、日历 AVAILABLE（公开含税 EUR 256.51/289.60/306.15/339.25）。仍观察到一次结果加载阶段的间歇性 TIMEOUT，不能声明网站完全稳定。生产错误信息现在保留脱敏后的失败阶段，避免只有 TIMEOUT 代码。

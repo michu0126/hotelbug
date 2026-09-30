@@ -17,6 +17,7 @@ def marriott_browser() -> HotelProvider:
     return MarriottBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
+        session_dir=settings.browser_session_dir,
     )
 
 
@@ -33,6 +34,7 @@ def accor_browser() -> HotelProvider:
     return AccorBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
+        session_dir=settings.browser_session_dir,
     )
 
 
@@ -47,6 +49,7 @@ def gha_browser() -> HotelProvider:
     return GHABrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
+        session_dir=settings.browser_session_dir,
     )
 
 

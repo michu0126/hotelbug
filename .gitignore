@@ -63,3 +63,5 @@ next-env.d.ts
 /data/catalog-checkpoint.json.tmp
 /data/monitor.sqlite*
 /data/monitor-status.json*
+.browser-sessions/
+**/.browser-sessions/

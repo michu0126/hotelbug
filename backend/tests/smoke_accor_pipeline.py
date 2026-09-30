@@ -13,8 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.core.errors import ProviderError
+from app.core.logging import redact
 from app.crawler.worker import process_one
 from app.models.tables import Base, CrawlJob, Hotel, PriceHistory, ProviderStatus
+from app.providers.browser_session import close_browser_sessions
+from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
 from app.services.calendar import get_calendar
 from app.services.jobs import enqueue
@@ -27,6 +31,7 @@ async def main():
     parser.add_argument("--provider", choices=("accor", "gha"), default="accor")
     parser.add_argument("--official-url", help="GHA sitemap detail URL for discovery instead of a known ID")
     parser.add_argument("--code", help="Accor or GHA hotel code for a single live pipeline test")
+    parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 10, 7))
     parser.add_argument(
         "--expect-empty", action="store_true", help="Require a successful no-availability job"
@@ -40,6 +45,31 @@ async def main():
         os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
     settings = get_settings()
+    if args.diagnostics:
+        original_factory = FACTORIES[args.provider]
+
+        def traced_factory():
+            provider = original_factory()
+            original_search = provider.search_rates
+
+            async def traced_search(request):
+                try:
+                    return await original_search(request)
+                except ProviderError as exc:
+                    print("provider_failure=", str(exc), flush=True)
+                    if exc.__cause__:
+                        print("cause=", redact(str(exc.__cause__)), flush=True)
+                    page = provider._page
+                    if page and not page.is_closed():
+                        print("failure_url=", redact(page.url), flush=True)
+                        excerpt = redact((await page.locator("body").inner_text())[:5000])
+                        print("failure_body=", ascii(excerpt), flush=True)
+                    raise
+
+            provider.search_rates = traced_search
+            return provider
+
+        FACTORIES[args.provider] = traced_factory
     with TemporaryDirectory(prefix="hotelbug-live-test-") as temp:
         engine = create_async_engine("sqlite+aiosqlite:///" + str(Path(temp) / "test.db"))
         async with engine.begin() as connection:
@@ -97,6 +127,7 @@ async def main():
                             "hotel": hotel.hotel_name,
                             "job_status": job.status,
                             "error": job.error_type,
+                            "error_message": job.error_message,
                             "persisted_quotes": count,
                             "provider_status": state.status,
                             "calendar_status": day_status,
@@ -113,6 +144,7 @@ async def main():
                 ):
                     raise SystemExit(2)
         finally:
+            await close_browser_sessions()
             await redis.aclose()
             await engine.dispose()
 

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     max_pending_jobs: int = Field(default=2000, ge=20, le=100000)
     browser_proxy_url: SecretStr = SecretStr("")
     browser_channel: str = ""
+    browser_session_dir: str = ".browser-sessions" if os.name == "nt" else "/data/browser-sessions"
     bark_url: SecretStr = SecretStr("")
     webhook_url: SecretStr = SecretStr("")
 

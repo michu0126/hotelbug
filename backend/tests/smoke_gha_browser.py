@@ -5,6 +5,7 @@ import asyncio
 from datetime import date, timedelta
 
 from app.core.errors import ProviderError
+from app.providers.browser_session import close_browser_sessions
 from app.providers.gha_browser import GHABrowserProvider
 from app.schemas.domain import RateRequest
 
@@ -13,10 +14,13 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy")
     parser.add_argument("--code", default="10624")
+    parser.add_argument("--session-dir")
     parser.add_argument("--date", type=date.fromisoformat, default=date.today() + timedelta(days=8))
     parser.add_argument("--all", action="store_true", help="Print every verified room offer")
     args = parser.parse_args()
-    provider = GHABrowserProvider(proxy_server=args.proxy, browser_channel="chrome")
+    provider = GHABrowserProvider(
+        proxy_server=args.proxy, browser_channel="chrome", session_dir=args.session_dir
+    )
     try:
         hotel = await provider.get_hotel_details(args.code)
         print(hotel.model_dump_json(), flush=True)
@@ -49,6 +53,7 @@ async def main():
         raise
     finally:
         await provider.close()
+        await close_browser_sessions()
 
 
 if __name__ == "__main__":

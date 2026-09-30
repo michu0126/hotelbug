@@ -17,6 +17,8 @@ DOM 中 `.tid-selectBtn` 的三层父节点包含计划标题 h5、价格 h5、�
 
 ### 自动目录接入
 
+2026-09-30 会话复用回归：hotelId 10624 对应 Avani Sukhumvit Bangkok Hotel（不是 Erbil Rotana，其 ID 是 238788）。2026-10-20/21 实际页面读到 35 条公开报价；示例 Avani Advance Purchase USD 92、Avani Flexi USD 102。随后从酒店发现任务到正式 Worker 报价任务的隔离数据库测试通过：SUCCEEDED、35 条 PriceHistory、Provider ONLINE、日历 AVAILABLE。专用会话的跨任务、跨重启和集团隔离亦通过本地真实 Chrome 测试。
+
 Scheduler 已加入 GHA sitemap 索引遍历，每轮最多请求一个目录、持久化地图/酒店游标、按队列余量提交详情页发现任务。详情页读取 BOOK NOW 的数字 hotelId，再验证预订页酒店信息并入库，不直接将候选路径当作已收录酒店。
 雅高和 GHA 的目录任务轮流提交，每次默认最多 1 家，发现任务优先级 90，高于普通查价 80/60/40；这样新酒店不会在全球日期队列积压时持续被压后，也控制单个集团的访问频率。
 当前官网索引列出 6 个子目录，其中 1–3 返回 200，4–6 返回 404；404/410 记录在 `catalog:gha.missing_maps` 并继续后续目录。可读目录的酒店页及酒店活动页父路径合并得到 825 个去重候选，尚未逐一验证，不能宣称 825 家已抓取成功或全量覆盖。

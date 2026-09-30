@@ -115,6 +115,29 @@ async def test_blocked_provider_is_paused(sessions, queue, monkeypatch):
         assert (await s.get(ProviderStatus, "marriott")).status == "BLOCKED"
 
 
+async def test_failure_keeps_stage_but_redacts_secrets(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+
+    class Failing(FixtureProvider):
+        async def health_check(self):
+            raise ProviderError(
+                ErrorCode.TIMEOUT,
+                "Booking failed at guest count token=private-value https://example.com/path?secret=private-value",
+            )
+
+    monkeypatch.setitem(FACTORIES, "marriott", Failing)
+    async with sessions() as s, s.begin():
+        row = await enqueue(s, JobInput(provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK))
+        job_id = row.id
+    await tick(sessions, queue, Settings())
+    await process_one(sessions, queue, Settings())
+    async with sessions() as s:
+        row = await s.get(CrawlJob, job_id)
+        assert row.error_type == "TIMEOUT"
+        assert "guest count" in row.error_message
+        assert "private-value" not in row.error_message
+
+
 async def test_unimplemented_provider_does_not_fake_success(sessions, queue, monkeypatch):
     monkeypatch.setenv("HYATT_ENABLED", "true")
     async with sessions() as s, s.begin():

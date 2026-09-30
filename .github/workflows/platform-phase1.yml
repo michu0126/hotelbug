@@ -63,6 +63,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker/compose.build.yml config --quiet
           docker compose -f docker-compose.yml -f docker/compose.build.yml build --pull
           docker compose -f docker-compose.yml -f docker/compose.build.yml run --rm --no-deps hotel-monitor-worker python -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); page=b.new_page(); page.set_content('<h1>Worker Chromium ready</h1>'); assert page.locator('h1').inner_text() == 'Worker Chromium ready'; b.close(); p.stop(); print('Worker Chromium ready')"
+          docker compose -f docker-compose.yml -f docker/compose.build.yml run --rm --no-deps -e PYTHONPATH=/app hotel-monitor-worker python tests/smoke_browser_session.py
           docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --no-build --pull never --wait --wait-timeout 180
           curl --fail http://localhost:8098/api/health/ready
           curl --fail http://localhost:8098/api/dashboard

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ErrorCode, ProviderError
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, redact
 from app.database.session import Session
 from app.models.tables import CrawlJob, Hotel, ProviderStatus, utcnow
 from app.providers.registry import create_provider
@@ -155,7 +155,7 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
             state.requests_today += 1
             if error:
                 current.retry_count += 1
-                current.error_type, current.error_message = error.code, error.code.value
+                current.error_type, current.error_message = error.code, redact(str(error))
                 transient = error.code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR, ErrorCode.RATE_LIMITED)
                 current.status = (
                     "PENDING" if transient and current.retry_count <= settings.max_retries else "FAILED"
@@ -248,7 +248,12 @@ async def main() -> None:
     try:
         await asyncio.gather(heartbeat(), *(consume() for _ in range(settings.worker_concurrency)))
     finally:
-        await redis.aclose()
+        from app.providers.browser_session import close_browser_sessions
+
+        try:
+            await close_browser_sessions()
+        finally:
+            await redis.aclose()
 
 
 if __name__ == "__main__":

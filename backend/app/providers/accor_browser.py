@@ -9,10 +9,10 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from playwright.async_api import Error as BrowserError
 from playwright.async_api import TimeoutError as BrowserTimeout
-from playwright.async_api import async_playwright
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.base import HotelProvider
+from app.providers.browser_session import new_provider_page
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://all.accor.com"
@@ -138,28 +138,38 @@ def parse_public_rates(html: str, request: RateRequest, page_url: str) -> list[R
 
 
 class AccorBrowserProvider(HotelProvider):
-    def __init__(self, proxy_server: str | None = None, browser_channel: str | None = None):
+    session_provider = "accor"
+
+    def __init__(
+        self,
+        proxy_server: str | None = None,
+        browser_channel: str | None = None,
+        session_dir: str | None = None,
+    ):
         self.proxy_server = proxy_server
         self.browser_channel = browser_channel
-        self._playwright = self._browser = self._context = self._page = None
+        self.session_dir = session_dir
+        self._page = None
 
     async def _get_page(self):
         if self._page is None:
-            self._playwright = await async_playwright().start()
-            options = {"headless": True}
-            if self.proxy_server:
-                options["proxy"] = {"server": self.proxy_server}
-            if self.browser_channel:
-                options["channel"] = self.browser_channel
-            try:
-                self._browser = await self._playwright.chromium.launch(**options)
-            except BrowserError as exc:
-                raise ProviderError(
-                    ErrorCode.BROWSER_UNAVAILABLE, "Chromium could not start in this runtime"
-                ) from exc
-            self._context = await self._browser.new_context(locale="en-US")
-            self._page = await self._context.new_page()
+            self._page = await new_provider_page(
+                self.session_provider,
+                proxy_server=self.proxy_server,
+                browser_channel=self.browser_channel,
+                session_dir=self.session_dir,
+            )
             self._page.set_default_timeout(30000)
+
+            # Consent can appear after the form becomes usable, especially on the
+            # second task in a persistent session. Handle it before blocked actions.
+            async def dismiss_consent(locator):
+                await locator.click()
+
+            await self._page.add_locator_handler(
+                self._page.get_by_text("Continue without Accepting", exact=False).first,
+                dismiss_consent,
+            )
         return self._page
 
     async def _open(self, code: str):
@@ -202,21 +212,27 @@ class AccorBrowserProvider(HotelProvider):
     async def search_rates(self, request: RateRequest) -> list[RateData]:
         if request.rooms != 1 or (request.check_out - request.check_in).days != 1:
             raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Accor page adapter supports one room, one night")
+        stage = "hotel page"
         try:
             page = await self._open(request.provider_hotel_id)
+            stage = "stay dates"
             await page.locator('[name="search.dateIn"]').fill(request.check_in.strftime("%d/%m/%Y"))
             await page.locator('[name="search.dateIn"]').press("Tab")
             await page.locator('[name="search.dateOut"]').fill(request.check_out.strftime("%d/%m/%Y"))
             await page.locator('[name="search.dateOut"]').press("Tab")
             if request.adults != 1:
+                stage = "guest count"
                 await page.locator("button").filter(has_text="1 room, 1 adult").click()
                 for _ in range(request.adults - 1):
                     await page.get_by_role("button", name="Add an adult", exact=True).click()
                 await page.locator('[name="search.dateIn"]').click()
                 await page.locator('[name="search.dateIn"]').press("Escape")
             form = page.locator("form").filter(has=page.locator('[name="search.dateIn"]'))
+            stage = "search submission"
             await form.get_by_role("button", name="See rates", exact=True).click()
+            stage = "booking navigation"
             await page.wait_for_url("**/booking/**")
+            stage = "public offers"
             await page.locator(
                 "label.hotel-accommodation-offers-content__label .offer-price--alternative"
             ).first.wait_for(state="visible", timeout=45000)
@@ -224,7 +240,7 @@ class AccorBrowserProvider(HotelProvider):
         except BrowserError as exc:
             raise ProviderError(
                 ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
-                "Accor booking page failed",
+                f"Accor booking page failed at {stage}",
             ) from exc
 
     async def get_calendar_rates(self, request: RateRequest) -> list[RateData]:
@@ -238,9 +254,6 @@ class AccorBrowserProvider(HotelProvider):
         return HealthResult(status="ONLINE" if rates else "DEGRADED", message="Accor rendered public offers")
 
     async def close(self):
-        if self._context:
-            await self._context.close()
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        if self._page:
+            await self._page.close()
+            self._page = None

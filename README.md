@@ -62,6 +62,8 @@ Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_
 
 雅高和 GHA 采集分别启用 `ACCOR_ENABLED=true`、`GHA_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
 
+Worker 为每个集团保留独立浏览器会话，任务结束只关闭当前查询页，不再每次重建空白浏览器。会话自动保存在现有 `app-data` 卷的 `/data/browser-sessions`，无需新增环境变量；正常重启后仍保留网站状态，集团和代理出口之间隔离。会话文件可能包含网站 Cookie，请勿上传或公开。此修改不代表其他集团的报价访问已经恢复。
+
 已启用且具有采集适配器的酒店默认进入全球目录轮询，每轮最多生成 20 个日期任务，未来 365 天滚动覆盖，活跃队列默认上限 2000。此处的“全球”指不限制酒店所在国家，不表示官方全球酒店目录或六集团房价适配已经全部验收。`GET /api/alerts` 可查看候选与复查结果；`GET /api/notifications` 需管理令牌，可查看发送结果。Telegram 在发送后进程崩溃、数据库尚未提交时可能重复投递，不能保证外部服务的严格一次发送。
 
 Marriott 默认 `MARRIOTT_ENABLED=false`。启用后 Worker 使用新的 Chromium 会话操作官网页面，健康检查低频尝试 NYCMQ 未来单晚。403/挑战暂停6小时。用户手动浏览器能显示报价，但新的 Playwright 会话目前在官网首页返回 403；不能据此认定用户网络故障，也不能认为启用开关后就一定能自动获取报价。
