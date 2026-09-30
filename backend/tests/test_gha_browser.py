@@ -24,16 +24,39 @@ def test_public_quote_matches_room_and_plan():
     assert rate.rate_name == "Avani Flexi"
 
 
-@pytest.mark.parametrize("replacement", ["DISCOVERY Avani Flexi", "DISCOVERY - AVANI Flexi"])
+@pytest.mark.parametrize(
+    "replacement", ["DISCOVERY Avani Flexi", "DISCOVERY - AVANI Flexi", "Members Avani Flexi"]
+)
 def test_member_plans_excluded_even_if_same_price(replacement):
     assert parse_public_offer(OFFER.replace("Avani Flexi", replacement), public_room(ROOM), SEARCH) is None
 
 
 @pytest.mark.parametrize(
-    "old,new", [("THB", "USD"), ("6,944", "6,945"), ("Including", "Excluding"), ("text-dark", "text-gold")]
+    "old,new", [("THB", "USD"), ("6,944", "0"), ("Including", "Excluding"), ("text-dark", "text-gold")]
 )
 def test_unverified_price_not_accepted(old, new):
     assert parse_public_offer(OFFER.replace(old, new), public_room(ROOM), SEARCH) is None
+
+
+def test_public_named_plan_can_be_above_advertised_from_price():
+    rate = parse_public_offer(
+        OFFER.replace("Avani Flexi", "Best Flexible Rate").replace("6,944", "7,200"),
+        public_room(ROOM),
+        SEARCH,
+    )
+    assert rate is not None
+    assert rate.total_price == Decimal("7200")
+    assert rate.rate_name == "Best Flexible Rate"
+
+
+def test_public_named_plan_below_advertised_from_price_remains_visible():
+    rate = parse_public_offer(
+        OFFER.replace("Avani Flexi", "Best Flexible Rate").replace("6,944", "1,000"),
+        public_room(ROOM),
+        SEARCH,
+    )
+    assert rate is not None
+    assert rate.total_price == Decimal("1000")
 
 
 @pytest.mark.parametrize("old,new", [("07 Oct", "08 Oct"), ("2026", "2027"), ("2 ADULTS", "3 ADULTS")])

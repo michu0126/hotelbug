@@ -88,7 +88,8 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
     if not headings:
         return None
     name = headings[0].get_text(" ", strip=True)
-    if "DISCOVERY" in name.upper():
+    upper_name = name.upper()
+    if "DISCOVERY" in upper_name or ("MEMBER" in upper_name and "NON-MEMBER" not in upper_name):
         return None
     prices = [h for h in headings if "/" in h.get_text() and "text-gold" not in h.get("class", [])]
     for price in prices:
@@ -96,7 +97,9 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
         if not money or "Including taxes and fees" not in price.parent.get_text(" ", strip=True):
             continue
         amount = Decimal(money[2].replace(",", ""))
-        if amount <= 0 or (money[1], amount) != room[1:]:
+        # The room-card "from" price is only a summary. A bookable named
+        # non-member plan may differ in either direction, including a bug price.
+        if amount <= 0 or money[1] != room[1]:
             continue
         return RateData(
             **search.model_dump(),
@@ -199,7 +202,11 @@ class GHABrowserProvider(AccorBrowserProvider):
             if not await checkbox.is_checked():
                 await page.locator("label").filter(has=checkbox).click()
             await page.get_by_text("Including taxes and fees", exact=True).first.wait_for()
-            buttons = page.locator(".tid-viewRates")
+            # Sold-out room cards can still render a disabled View Rates button.
+            # Do not let one unavailable room abort quotes from available rooms.
+            buttons = page.locator(".tid-viewRates:not([disabled])")
+            if not await buttons.count():
+                return []
             result = {}
             for index in range(await buttons.count()):
                 button = buttons.nth(index)

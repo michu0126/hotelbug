@@ -8,9 +8,11 @@ Avani Sukhumvit Bangkok Hotel 的详情页 BOOK NOW 链接提供公共预订参�
 点击 VIEW RATES 后，可见具体计划 Avani Flexi、THB 6,944/night、Including taxes and fees；另外两个 DISCOVERY 会员计划为 THB 6,250 和 6,674，不应混入非会员基线。
 DOM 中 `.tid-selectBtn` 的三层父节点包含计划标题 h5、价格 h5、税费文字、`.tid-viewTotalStay` 条款按钮；移动端重复节点需要去重。
 `backend/tests/probe_gha_booking.py` 可重现实测，只查价，不选择房间、不提交预订。
-已实现 `GHABrowserProvider` 并注册：读取每个房型的明确 NON-MEMBER RATES 含税金额，再打开具体计划，仅保存与该金额/币种匹配的非 DISCOVERY 计划。房型和计划用名称哈希标识，不伪造官网代码。按网页展示保存 nightly 价格，税额、取消和早餐字段未知时为 NULL。
+已实现 `GHABrowserProvider` 并注册：读取每个房型的明确 NON-MEMBER RATES 含税起价，再打开具体计划，只保存同币种、正金额、含税且未标会员的可见计划。房型卡片的 “FROM” 是聚合起价，不要求它等于每一个方案价；若公开计划出现更低的异常价格，也不会因此被过滤。房型和计划用名称哈希标识，不伪造官网代码。按网页展示保存 nightly 价格，税额、取消和早餐字段未知时为 NULL。
 真实 Worker 测试 `tests.smoke_accor_pipeline --provider gha --proxy ...` 已通过：发现任务 SUCCEEDED、查价任务 SUCCEEDED，3 条 PriceHistory，Provider ONLINE。此轮官网显示 USD 207/217/252，币种按实际页面保存而非固定 THB。
-11 个离线测试覆盖日期、人数、酒店 URL、会员排除、税费、币种和金额匹配。仍需验证其他品牌、跨年日期的页面格式、精确总价/条款及全量目录，不能据单酒店样本声明 GHA 全量完成。
+离线测试覆盖日期、人数、酒店 URL、会员排除、税费、币种和公开方案价。仍需验证其他品牌、跨年日期的页面格式、精确总价/条款及全量目录，不能据少数酒店样本声明 GHA 全量完成。
+
+2026-09-30 跨地区实测：官网目录候选页成功确认 Erbil Rotana（伊拉克，hotelId 238788）、Viceroy Santa Monica（美国，5149）、The Leela Hyderabad（印度，196125）的酒店身份。Viceroy Santa Monica 2026-10-08/09 页面有售罄房型的禁用 VIEW RATES 按钮；原采集器误点击并超时，已改为只点可用按钮。该酒店非会员房型起价 USD 543，但可见的 Best Flexible Rate 含税报价为 USD 574/night；旧的“方案价必须等于起价”条件会丢掉全部公开方案。修正后读到 34 条公开报价，最低示例 Best Flexible Rate USD 574。Erbil Rotana 同日期读到 18 条，公开 Flexible Rate 起价 USD 217。另用隔离数据库从 Viceroy 官网详情页发现酒店，Worker 查价并写入 34 条 PriceHistory，任务 SUCCEEDED、Provider ONLINE。以上均为测试时的页面价格，不代表现在仍可预订或全目录已验收。
 
 ### 自动目录接入
 

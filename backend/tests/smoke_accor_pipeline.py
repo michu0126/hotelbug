@@ -25,6 +25,7 @@ async def main():
     parser.add_argument("--proxy")
     parser.add_argument("--provider", choices=("accor", "gha"), default="accor")
     parser.add_argument("--official-url", help="GHA sitemap detail URL for discovery instead of a known ID")
+    parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 10, 7))
     args = parser.parse_args()
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
     os.environ[args.provider.upper() + "_ENABLED"] = "true"
@@ -62,7 +63,7 @@ async def main():
                 print("discovery=", discovery.status, discovery.error_type, flush=True)
                 if hotel is None:
                     raise SystemExit(2)
-                day = date(2026, 10, 7)
+                day = args.date
                 job = await enqueue(
                     session,
                     JobInput(
