@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.database.session import get_session
 from app.models.tables import (
+    AppSetting,
     CrawlJob,
     Hotel,
     NotificationLog,
@@ -55,6 +56,47 @@ def admin(authorization: Annotated[str | None, Header()] = None) -> None:
 
 def encode(row) -> dict:
     return jsonable_encoder({column.name: getattr(row, column.name) for column in row.__table__.columns})
+
+
+class TelegramSettingsInput(BaseModel):
+    bot_token: str | None = Field(default=None, max_length=256)
+    chat_id: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+
+
+@app.get("/api/settings/telegram", dependencies=[Depends(admin)])
+async def get_telegram_settings(db: Db):
+    row = await db.get(AppSetting, "telegram")
+    return {
+        "configured": bool(
+            (row.value.get("bot_token") if row else None) or settings.telegram_bot_token.get_secret_value()
+        )
+        and bool((row.value.get("chat_id") if row else None) or settings.telegram_chat_id),
+        "chat_id": row.value.get("chat_id", "") if row else settings.telegram_chat_id,
+        "enabled": row.value.get("enabled", True) if row else True,
+    }
+
+
+@app.put("/api/settings/telegram", dependencies=[Depends(admin)])
+async def put_telegram_settings(data: TelegramSettingsInput, db: Db):
+    row = await db.get(AppSetting, "telegram")
+    values = dict(row.value) if row else {}
+    if data.bot_token is not None:
+        values["bot_token"] = data.bot_token.strip()
+    values.update(chat_id=data.chat_id.strip(), enabled=data.enabled)
+    if not values["chat_id"]:
+        raise HTTPException(422, "Chat ID is required")
+    if row:
+        row.value = values
+        row.updated_at = utcnow()
+    else:
+        db.add(AppSetting(key="telegram", value=values))
+    await db.commit()
+    return {
+        "configured": bool(values.get("bot_token") or settings.telegram_bot_token.get_secret_value()),
+        "chat_id": values["chat_id"],
+        "enabled": values["enabled"],
+    }
 
 
 @app.get("/api/health/live")

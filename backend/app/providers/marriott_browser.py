@@ -148,6 +148,9 @@ class MarriottBrowserProvider(HotelProvider):
         self._context: BrowserContext | None = None
         self._page: Page | None = None
 
+    def configure_hotel(self, hotel_name: str) -> None:
+        self._hotel_name = hotel_name
+
     async def _get_page(self) -> Page:
         if self._page is None:
             self._playwright = await async_playwright().start()

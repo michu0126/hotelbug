@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 
 async def execute(job: CrawlJob, hotel: Hotel | None):
-    provider = create_provider(job.provider)
+    provider = create_provider(job.provider, hotel.hotel_name if hotel else None)
     try:
         if job.kind == JobKind.PROVIDER_HEALTHCHECK:
             return await provider.health_check()

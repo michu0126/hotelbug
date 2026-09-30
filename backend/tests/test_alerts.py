@@ -9,9 +9,12 @@ from sqlalchemy import func, select
 from test_domain import fixture_rate
 from test_pipeline import FixtureProvider
 
+from app.api.main import app
+from app.api.main import settings as api_settings
 from app.core.config import Settings
 from app.core.logging import redact
 from app.crawler.worker import process_one
+from app.database.session import get_session
 from app.models.tables import CrawlJob, NotificationLog, PriceAlert, utcnow
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
@@ -141,3 +144,44 @@ async def test_telegram_failure_is_not_marked_sent(sessions, status, body, expec
 
 def test_telegram_token_redacted_from_url():
     assert "private-token" not in redact("POST https://api.telegram.org/botprivate-token/sendMessage")
+
+
+async def test_ui_saved_telegram_config_is_used_for_delivery(sessions, monkeypatch):
+    monkeypatch.setattr(api_settings, "admin_token", SecretStr("admin-test"))
+
+    async def dependency():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = dependency
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
+            response = await api.put(
+                "/api/settings/telegram",
+                headers={"authorization": "Bearer admin-test"},
+                json={"bot_token": "ui-test-token", "chat_id": "987", "enabled": True},
+            )
+            assert response.status_code == 200 and response.json()["configured"]
+            saved = await api.get("/api/settings/telegram", headers={"authorization": "Bearer admin-test"})
+            assert saved.json()["chat_id"] == "987" and "ui-test-token" not in saved.text
+    finally:
+        app.dependency_overrides.clear()
+
+    async with sessions() as session, session.begin():
+        hotel = await seed_history(session)
+        await detect_drops(session, hotel, [quote("70")], Settings())
+        alert = await session.scalar(select(PriceAlert))
+        await confirm_drop(session, alert.id, alert.verification_job_id, [quote("70")])
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        assert await deliver_one(
+            sessions, Settings(telegram_bot_token=SecretStr(""), telegram_chat_id=""), client
+        )
+    assert len(requests) == 1
+    assert "ui-test-token" in str(requests[0].url)
+    assert json.loads(requests[0].content)["chat_id"] == "987"

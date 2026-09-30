@@ -7,7 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
-from app.models.tables import NotificationLog, PriceAlert, utcnow
+from app.models.tables import AppSetting, NotificationLog, PriceAlert, utcnow
 
 GROUP_NAMES = {
     "marriott": "万豪 Marriott",
@@ -36,10 +36,16 @@ def telegram_text(payload: dict) -> str:
 
 
 async def deliver_one(sessions: async_sessionmaker, settings: Settings, client: httpx.AsyncClient) -> bool:
-    token = settings.telegram_bot_token.get_secret_value()
-    if not token or not settings.telegram_chat_id:
-        return False
     async with sessions() as session, session.begin():
+        saved = await session.get(AppSetting, "telegram")
+        if saved and saved.value.get("enabled") is False:
+            return False
+        token = (
+            saved.value.get("bot_token") if saved else None
+        ) or settings.telegram_bot_token.get_secret_value()
+        chat_id = (saved.value.get("chat_id") if saved else None) or settings.telegram_chat_id
+        if not token or not chat_id:
+            return False
         now = utcnow()
         log = await session.scalar(
             select(NotificationLog)
@@ -65,7 +71,7 @@ async def deliver_one(sessions: async_sessionmaker, settings: Settings, client: 
             response = await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
-                    "chat_id": settings.telegram_chat_id,
+                    "chat_id": chat_id,
                     "text": telegram_text(alert.payload),
                     "link_preview_options": {"is_disabled": True},
                 },

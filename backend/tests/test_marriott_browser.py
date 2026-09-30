@@ -15,6 +15,7 @@ from app.providers.marriott_browser import (
     parse_hotel_page,
     parse_room_page,
 )
+from app.providers.registry import create_provider
 from app.schemas.domain import RateRequest
 
 
@@ -78,6 +79,12 @@ def test_guest_count_from_rendered_summary():
     assert guest_count("1 Room, 1 Guest") == 1
     with pytest.raises(ProviderError):
         guest_count("Guests unavailable")
+
+
+def test_worker_factory_uses_browser_and_passes_hotel_name():
+    provider = create_provider("marriott", "New York Marriott Marquis")
+    assert isinstance(provider, MarriottBrowserProvider)
+    assert provider._hotel_name == "New York Marriott Marquis"
 
 
 @pytest.mark.asyncio

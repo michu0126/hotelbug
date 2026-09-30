@@ -3,6 +3,7 @@ import {computed,onMounted,onUnmounted,ref,watch} from 'vue';
 const status=ref(null),providers=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
 const error=ref(''),actionMessage=ref(''),loading=ref(false),actionBusy=ref(false);
 const adminToken=ref(''),propertyCode=ref('0338'),selectedProvider=ref('accor'),hotelId=ref(''),daysAhead=ref(365);
+const telegramBotToken=ref(''),telegramChatId=ref(''),telegramConfigured=ref(false),telegramEnabled=ref(true),telegramMessage=ref('');
 const today=new Date(),month=ref(`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`);
 let timer;
 async function api(path,options={}){
@@ -57,6 +58,25 @@ async function watchHotel(){
     await refresh();
   }catch(e){actionMessage.value=e.message;}finally{actionBusy.value=false;}
 }
+async function saveTelegram(){
+  actionBusy.value=true;telegramMessage.value='';
+  try{
+    const result=await api('/settings/telegram',{method:'PUT',headers:{'content-type':'application/json','authorization':`Bearer ${adminToken.value}`},
+      body:JSON.stringify({bot_token:telegramBotToken.value||null,chat_id:telegramChatId.value.trim(),enabled:telegramEnabled.value})});
+    telegramConfigured.value=result.configured;
+    telegramBotToken.value='';
+    telegramMessage.value=result.configured?'Telegram 设置已保存，确认降价后会使用此机器人发送。':'已保存 Chat ID；仍需填写机器人 Token。';
+  }catch(e){telegramMessage.value=e.message;}finally{actionBusy.value=false;}
+}
+async function loadTelegramSettings(){
+  if(!adminToken.value)return;
+  try{
+    const saved=await api('/settings/telegram',{headers:{authorization:`Bearer ${adminToken.value}`}});
+    telegramChatId.value=saved.chat_id||'';
+    telegramConfigured.value=saved.configured;
+    telegramEnabled.value=saved.enabled;
+  }catch(e){telegramMessage.value=e.message;}
+}
 const names={marriott:'万豪',ihg:'IHG',hilton:'希尔顿',hyatt:'凯悦',accor:'雅高',gha:'GHA'};
 const when=v=>v?new Date(v).toLocaleString('zh-CN'):'尚无记录';
 const calendarDays=computed(()=>calendar.value?.days||[]);
@@ -71,7 +91,7 @@ onUnmounted(()=>clearInterval(timer));
     <p class="notice">官网采集正在逐集团验证。已收录酒店按未来一年轮询；同条件价格较历史基准下降 50% 时自动复查，确认后通过 Telegram 通知。历史基准至少需要 3 天记录。</p>
     <section class="cards"><article><small>酒店库</small><strong>{{status?.hotels??'—'}}</strong></article><article><small>今日采集报价</small><strong>{{status?.rates_today??'—'}}</strong></article><article><small>待处理任务</small><strong>{{status?.queued_jobs??'—'}}</strong></article><article><small>已确认异常</small><strong>{{status?.confirmed_alerts??'—'}}</strong></article></section>
     <section class="panel"><h2>酒店与价格日历</h2><p class="muted">启用对应集团并设置管理令牌后可提交任务。雅高与 GHA 已通过官网单酒店采集入库实测；其他集团的状态见下方。</p>
-      <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="gha">GHA</option><option value="marriott">万豪（实验）</option></select></label><label>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="雅高 0338 / GHA 10624"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
+      <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存" @blur="loadTelegramSettings"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="gha">GHA</option><option value="marriott">万豪（实验）</option></select></label><label>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="雅高 0338 / GHA 10624"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
       <div class="fields"><label>酒店<select v-model="hotelId"><option value="">请选择</option><option v-for="h in hotels" :key="h.id" :value="h.id">{{h.hotel_name}} · {{h.city||h.provider_hotel_id}}</option></select></label><label>月份<input v-model="month" type="month"></label><button class="primary" :disabled="actionBusy||!hotelId" @click="crawlMonth">采集本月报价</button></div>
       <div class="fields"><label>自动监控未来天数<select v-model="daysAhead"><option :value="30">30 天</option><option :value="90">90 天</option><option :value="365">365 天</option></select></label><button class="primary" :disabled="actionBusy||!hotelId" @click="watchHotel">保存自动监控</button><small>已启用酒店监控 {{watches.filter(w=>w.enabled).length}} 项</small></div>
       <p v-if="actionMessage" role="status" class="notice">{{actionMessage}}</p>
@@ -79,9 +99,10 @@ onUnmounted(()=>clearInterval(timer));
       <p v-else-if="!hotels.length" class="empty">尚未收录酒店。</p>
     </section>
     <section class="panel"><h2>降价提醒</h2><p v-if="!alerts.length" class="empty">暂无降价事件。积累历史报价后自动比较并复查。</p><div class="table" v-else><table><thead><tr><th>酒店 / 集团</th><th>入住日期</th><th>当前价格</th><th>历史基准</th><th>复查结果</th></tr></thead><tbody><tr v-for="a in alerts" :key="a.id"><td>{{a.payload.hotel_name}} · {{names[a.payload.provider]}}</td><td>{{a.payload.check_in}}</td><td>{{a.payload.price}} {{a.payload.currency}}</td><td>{{a.payload.baseline}} {{a.payload.currency}}</td><td>{{a.confirmed?'已确认':a.payload.verification==='REJECTED'?'价格已变化':'待复查'}}</td></tr></tbody></table></div></section>
+    <section class="panel"><h2>Telegram 通知设置</h2><p class="muted">填写上面的管理令牌后保存；机器人 Token 留空表示保留已保存的值。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveTelegram">保存 Telegram 设置</button><small>{{telegramConfigured?'已配置':'尚未在此页面保存'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
     <section class="panel"><h2>后台服务</h2><p>Worker 心跳：{{when(status?.worker_heartbeat)}}</p><p>Scheduler 心跳：{{when(status?.scheduler_heartbeat)}}</p><small>心跳只表示进程在线。请以 Provider 状态和实际报价为准。</small></section>
     <section class="panel"><h2>Provider 状态</h2><div class="providers"><article v-for="p in providers" :key="p.provider"><h3>{{names[p.provider]}}</h3><span class="badge">{{p.implemented?(p.enabled?p.status:'默认关闭 · '+p.status):'待研究 / 尚未实现'}}</span><p>{{p.last_error||p.verification}}</p><small>今日任务 {{p.requests_today||0}} · 成功 {{p.success_count||0}}</small></article></div></section>
     <section class="panel"><h2>最近任务</h2><p v-if="!jobs.length" class="empty">暂无任务。</p><div class="table" v-else><table><thead><tr><th>集团</th><th>类型</th><th>状态</th><th>计划时间</th><th>错误</th></tr></thead><tbody><tr v-for="j in jobs" :key="j.id"><td>{{names[j.provider]}}</td><td>{{j.kind}}</td><td>{{j.status}}</td><td>{{when(j.scheduled_at)}}</td><td>{{j.error_type||'—'}}</td></tr></tbody></table></div></section>
-    <footer>价格来自实际成功采集；无数据即显示空白 · Telegram 发送需要配置机器人令牌和 Chat ID</footer>
+    <footer>价格来自实际成功采集；无数据即显示空白 · Telegram 机器人可在本页面设置</footer>
   </main>
 </template>

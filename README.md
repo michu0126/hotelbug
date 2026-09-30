@@ -8,7 +8,7 @@
 - 六服务 Compose、独立 Scheduler 与 Worker、持久化任务、优先级、去重、租约恢复、独立 Provider 限流。
 - 标准化 Hotel/Rate 数据结构、Decimal 金额、10 张数据库表、追加式历史、报价身份隔离。
 - Vue 3 + Vite 真实基础状态页；无演示报价。
-- Marriott 增加了 Chromium 官网页面采集的实验适配器和离线解析测试。实验适配器已改为首页搜索酒店、从结果点击 View Rates、再选择日期和解析公开非会员价格；独立自动浏览器访问仍失败，**未注册到线上 Worker**。目前仍使用直连 JSON 的实验适配器，NAS 实采尚未验收。
+- Marriott Worker 已切换为 Chromium 官网页面适配器：使用酒店名称搜索、从结果点击 View Rates，再选择日期并读取非会员含税费价。开发机全新浏览器会话仍在官网首页收到 403，NAS 实采尚未验收；启用开关不保证能够获取报价。旧的独立 JSON 适配器仅保留作研究代码，不再是 Worker 默认入口。
 - 雅高浏览器采集器已接入 Worker：真实任务测试成功收录酒店并写入 4 条非会员含税报价。全球目录已发现 5,899 个雅高页面链接，尚未批量导入和验证。
 - 历史中位数降价判断、二次抓取确认、Telegram 重试队列和全年酒店轮询已实现；真实机器人送达、六集团全球数据、Linux浏览器/NAS实采仍待验收。
 - [实施计划](IMPLEMENTATION_PLAN.md) / [Provider 研究记录](docs/providers/)。
@@ -51,19 +51,19 @@ docker compose -f docker-compose.yml -f docker/compose.build.yml up -d --build
 
 ## 配置
 
-所有部署配置从环境变量读取；API返回不会泄露数据库URL、Token或Cookie。
+服务与采集配置从环境变量读取；Telegram Bot Token、Chat ID、启用状态也可在网页中用管理令牌保存，网页不会回显已保存的 Bot Token。该设置保存在 PostgreSQL 中，请保护数据库备份。
 默认 TZ=Asia/Shanghai；数据库时间使用UTC。
 `DATABASE_URL` / `REDIS_URL` 在Compose中按服务名生成，独立开发时可以自行配置。
 并发、请求间隔、任务超时、调度周期见 .env.example。每个Provider有独立Redis锁/限流键，默认同一Provider并发1、间隔5秒。
 最大任务重试3次、指数退避+jitter。403/挑战暂停6小时，429至少暂停1小时且不早于Retry-After。
 任务租约超过执行超时60秒；崩溃任务可恢复，重复崩溃达到上限后终止。
-Telegram 使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。有效报价入库后比较同一酒店、日期、房型、房价方案、币种和住客条件的历史每日中位数；至少 3 个历史观察日，默认降幅达到 50% 后排入复查，60 秒后重新采集仍满足条件才生成通知。发送失败持久化重试，429 遵守 Telegram retry_after。Bark/Webhook 尚未实现。
+Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID 环境变量。有效报价入库后比较同一酒店、日期、房型、房价方案、币种和住客条件的历史每日中位数；至少 3 个历史观察日，默认降幅达到 50% 后排入复查，60 秒后重新采集仍满足条件才生成通知。发送失败持久化重试，429 遵守 Telegram retry_after。Bark/Webhook 尚未实现。
 
 雅高采集启用 `ACCOR_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
 
 已启用且具有采集适配器的酒店默认进入全球目录轮询，每轮最多生成 20 个日期任务，未来 365 天滚动覆盖，活跃队列默认上限 2000。此处的“全球”指不限制酒店所在国家，不表示官方全球酒店目录或六集团房价适配已经全部验收。`GET /api/alerts` 可查看候选与复查结果；`GET /api/notifications` 需管理令牌，可查看发送结果。Telegram 在发送后进程崩溃、数据库尚未提交时可能重复投递，不能保证外部服务的严格一次发送。
 
-Marriott 默认 `MARRIOTT_ENABLED=false`。启用后健康检查低频尝试 NYCMQ 未来单晚。403/挑战仍暂停6小时。交互式浏览器会话能显示报价，但新的 Playwright 会话访问首页或预订页失败，因此浏览器实验适配器尚未接入 Worker，不应认为启用开关后就能自动获取报价。
+Marriott 默认 `MARRIOTT_ENABLED=false`。启用后 Worker 使用新的 Chromium 会话操作官网页面，健康检查低频尝试 NYCMQ 未来单晚。403/挑战暂停6小时。用户手动浏览器能显示报价，但新的 Playwright 会话目前在官网首页返回 403；不能据此认定用户网络故障，也不能认为启用开关后就一定能自动获取报价。
 单酒店 Watchlist 可选未来30/90/365天；所有已收录且已启用集团的酒店也会自动参与全年轮询。Scheduler 按 HOT/WARM/COLD 间隔去重，目录自动发现尚在开发。
 
 ## 增加酒店 / Provider
