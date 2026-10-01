@@ -171,7 +171,13 @@ def quote_page(*, room_count=1, missing=False, html=None):
     button = MagicMock()
     button.count = AsyncMock(return_value=1)
     button.click = AsyncMock()
+    label = MagicMock()
+    label.count = AsyncMock(return_value=1)
+    label.first = label
+    label.click = AsyncMock()
+    button.locator.return_value.filter.return_value = label
     room.get_by_role.return_value = button
+    room.get_by_text.return_value.first.wait_for = AsyncMock()
     room.locator.return_value.first.wait_for = AsyncMock()
     rooms = MagicMock()
     rooms.count = AsyncMock(return_value=room_count)
@@ -187,6 +193,38 @@ def quote_page(*, room_count=1, missing=False, html=None):
 
 
 @pytest.mark.asyncio
+async def test_title_case_stay_dates_control_matches_official_page(monkeypatch):
+    provider = MarriottBrowserProvider()
+    request = RateRequest(
+        provider_hotel_id="NYCMQ", check_in=date(2026, 10, 20), check_out=date(2026, 10, 21)
+    )
+    locator = MagicMock()
+    locator.first = locator
+    locator.inner_text = AsyncMock(
+        side_effect=["1 Room, 2 Guests", "Stay Dates (1 Night)\nTue, Oct 20\nWed, Oct 21"]
+    )
+    locator.click = AsyncMock()
+    locator.wait_for = AsyncMock()
+    identity = base64.urlsafe_b64encode(b"NYCMQ|REGB|DBDB|2026-10-20|2026-10-21|sample").decode()
+    locator.count = AsyncMock(return_value=1)
+    locator.get_attribute = AsyncMock(return_value=f"/room?productId={identity}")
+    page = MagicMock()
+    page.get_by_role.return_value = locator
+    page.locator.return_value = locator
+    monkeypatch.setattr(provider, "_choose_day", AsyncMock())
+
+    await provider._set_search(page, request)
+
+    patterns = [
+        item.kwargs["name"]
+        for item in page.get_by_role.call_args_list
+        if getattr(item.kwargs.get("name"), "pattern", "") == "STAY DATES"
+    ]
+    assert len(patterns) == 2
+    assert all(pattern.search("Stay Dates (1 Night)") for pattern in patterns)
+
+
+@pytest.mark.asyncio
 async def test_all_rooms_are_read_not_only_first_eight():
     provider = MarriottBrowserProvider()
     page, rooms, room = quote_page(room_count=9)
@@ -195,6 +233,19 @@ async def test_all_rooms_are_read_not_only_first_eight():
     assert len(rates) == 9
     assert rooms.nth.call_args_list == [call(index) for index in range(9)]
     assert room.inner_html.await_count == 9
+    assert room.get_by_text.return_value.first.wait_for.await_count == 9
+    assert room.get_by_role.return_value.locator.return_value.filter.return_value.click.await_count == 9
+    room.get_by_role.return_value.click.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_room_button_without_label_still_uses_normal_click():
+    page, _, room = quote_page()
+    button = room.get_by_role.return_value
+    button.locator.return_value.filter.return_value.count.return_value = 0
+    request = RateRequest(provider_hotel_id="NYCMQ", check_in=date(2026, 10, 7), check_out=date(2026, 10, 8))
+    assert len(await MarriottBrowserProvider()._collect_rates(page, request)) == 1
+    button.click.assert_awaited_once()
 
 
 @pytest.mark.asyncio

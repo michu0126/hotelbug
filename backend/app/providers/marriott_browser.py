@@ -236,12 +236,14 @@ class MarriottBrowserProvider(HotelProvider):
             timeout=30000
         )
         await page.get_by_role("heading", name="Select a Room and Rate").wait_for(timeout=30000)
-        await page.get_by_role("button", name=re.compile(r"STAY DATES")).first.click()
+        await page.get_by_role("button", name=re.compile(r"STAY DATES", re.IGNORECASE)).first.click()
         await self._choose_day(page, search.check_in)
         await self._choose_day(page, search.check_out)
         await page.get_by_role("button", name="Update", exact=True).click()
         await page.get_by_role("heading", name="Select a Room and Rate").wait_for(timeout=30000)
-        dates = await page.get_by_role("button", name=re.compile(r"STAY DATES")).first.inner_text()
+        dates = await page.get_by_role(
+            "button", name=re.compile(r"STAY DATES", re.IGNORECASE)
+        ).first.inner_text()
         for day in (search.check_in, search.check_out):
             if f"{WEEKDAYS[day.weekday()]}, {MONTHS[day.month - 1]} {day.day:02d}" not in dates:
                 raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott page shows unexpected stay dates")
@@ -275,9 +277,18 @@ class MarriottBrowserProvider(HotelProvider):
         result = []
         for index in range(await rooms.count()):
             room = rooms.nth(index)
+            # Checking the tax toggle re-renders the room cards asynchronously.
+            # Do not expand a stale pre-tax card that is about to be replaced.
+            await room.get_by_text("Taxes and all fees included", exact=True).first.wait_for(timeout=15000)
             button = room.get_by_role("button", name="View Rates")
             if await button.count():
-                await button.click()
+                # The public page's delegated handler depends on the nested span
+                # target; clicking the outer button can leave it unexpanded.
+                label = button.locator("span").filter(has_text=re.compile(r"^View Rates$"))
+                if await label.count():
+                    await label.first.click()
+                else:
+                    await button.click()
             await room.locator(".rate-card-content").first.wait_for(timeout=15000)
             result.extend(parse_room_page(await room.inner_html(), search))
         if not result:
