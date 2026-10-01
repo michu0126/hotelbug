@@ -24,6 +24,25 @@ Scheduler 已加入 GHA sitemap 索引遍历，每轮最多请求一个目录、
 当前官网索引列出 6 个子目录，其中 1–3 返回 200，4–6 返回 404；404/410 记录在 `catalog:gha.missing_maps` 并继续后续目录。可读目录的酒店页及酒店活动页父路径合并得到 825 个去重候选，尚未逐一验证，不能宣称 825 家已抓取成功或全量覆盖。
 详情页 URL → 正式 Worker 发现 → 查价 → SQLite 入库实测成功，样本 Avani Sukhumvit Bangkok Hotel 保存 3 条真实报价。目录重启续跑、去重和缺失子目录继续执行均有自动测试。
 
+### 2026-10-01 新品牌回归：Capella Taipei
+
+本轮真实读取官网 sitemap 索引和其中 `sitemap-3.xml`，该页 1000 个公开链接中包含
+`https://www.ghadiscovery.com/ultratravel-collection/capella-taipei`。从此实际链接执行
+隔离 Worker 酒店发现，确认 Capella Taipei、公开 booking hotelId `224544`。
+首次 2026-10-20 / 10-21 查询有真实房型和含税价格，但整任务失败。
+失败瞬间的公开 DOM 表明 Superior Accessible King Room 只显示 FROM / USD 1,189，
+并没有其他房型的 NON-MEMBER RATES 标签；不能误报整站拒绝，也不能把 FROM 写成方案报价。
+
+适配器现允许该总结栏提供房型与币种身份，仍必须展开 VIEW RATES，读取具体非会员方案、
+币种和含税说明才保存报价。FROM 不入库、不用于降幅比较，会员计划仍排除。
+修正后同一正式 Worker 流程成功：酒店发现 SUCCEEDED、报价 SUCCEEDED、17 条 PriceHistory、
+Provider ONLINE、日历 AVAILABLE。测试独立临时数据库，无 Telegram 行情发送；不代表群晖已升级或 GHA 全目录已验收。
+
+另移除“最多展开10次更多方案”的截断；分页以实际可见方案增加判断加载，不再假设手机重复节点始终为两倍。
+分页未完成时报告超时，不把不完整报价集当作完整扫描覆盖旧日历。相关离线测试覆盖12次展开与超时失败。
+新版再次真实查询 Capella Taipei 同日期，仍成功入库17条；美国 Viceroy Santa Monica
+同为2026-10-20 / 10-21的正式 Worker 回归成功入库34条，Provider ONLINE、日历 AVAILABLE。
+
 ## 早期接口观察（历史记录，不是当前实现依赖）
 状态：Python适配尚未实现；Phase6。旧Node页面采集器独立保留。
 官网入口：https://www.ghadiscovery.com/；酒店详情→BOOK NOW→预订页。

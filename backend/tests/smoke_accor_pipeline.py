@@ -60,6 +60,19 @@ async def main():
         os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
     settings = get_settings()
+    if args.diagnostics and args.provider == "gha":
+        from app.providers import gha_browser
+
+        original_room_parser = gha_browser.public_room
+
+        def traced_room_parser(html):
+            try:
+                return original_room_parser(html)
+            except ProviderError:
+                print("failed_room_snapshot=", json.dumps(html[:12000], ensure_ascii=True), flush=True)
+                raise
+
+        gha_browser.public_room = traced_room_parser
     if args.diagnostics or args.headed or args.headless:
         original_factory = FACTORIES[args.provider]
 
@@ -83,6 +96,18 @@ async def main():
                         print("failure_url=", redact(page.url), flush=True)
                         excerpt = redact((await page.locator("body").inner_text())[:5000])
                         print("failure_body=", ascii(excerpt), flush=True)
+                        if args.provider == "gha":
+                            room_cards = await page.locator(".tid-viewRates:not([disabled])").evaluate_all(
+                                """buttons => buttons.slice(0, 3).map(button => {
+                                    let parent = button;
+                                    while (parent) {
+                                        if (parent.querySelector('h5.px-5')) return parent.outerHTML.slice(0, 10000);
+                                        parent = parent.parentElement;
+                                    }
+                                    return null;
+                                })"""
+                            )
+                            print("public_room_cards=", json.dumps(room_cards, ensure_ascii=True), flush=True)
                         if args.provider == "ihg":
                             controls = await page.locator(
                                 '#room-and-guest, [data-testid="adults-count-input"], '
@@ -136,6 +161,7 @@ async def main():
                     print("discovery_error=", discovery.error_message, flush=True)
                 if hotel is None:
                     raise SystemExit(2)
+                print("hotel_code=", hotel.provider_hotel_id, flush=True)
                 day = args.date
                 job = await enqueue(
                     session,

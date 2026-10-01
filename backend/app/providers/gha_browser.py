@@ -1,5 +1,6 @@
 """GHA public booking-page adapter. No private API or booking submission."""
 
+import asyncio
 import hashlib
 import re
 from datetime import date, timedelta
@@ -72,13 +73,21 @@ def verify_stay(html: str, url: str, search: RateRequest) -> None:
 
 
 def public_room(html: str) -> tuple[str, str, Decimal]:
+    """Read room/currency identity; the card's FROM amount is never stored as a rate."""
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.select_one("h5.px-5")
     label = soup.find("span", string="NON-MEMBER RATES")
+    if label is None:
+        # Some Capella room cards have only FROM, even beside room cards with
+        # separate member/non-member columns. Eligibility is checked on named
+        # plans after opening View Rates, not inferred from this summary.
+        label = soup.find("span", string="FROM")
     price = label.parent.find("h5") if label else None
     money = MONEY.fullmatch(price.get_text(" ", strip=True)) if price else None
     if not heading or not money or "Including taxes and fees" not in soup.get_text(" ", strip=True):
-        raise ProviderError(ErrorCode.PROVIDER_CHANGED, "GHA room identity or public inclusive price missing")
+        raise ProviderError(
+            ErrorCode.PROVIDER_CHANGED, "GHA room identity or inclusive summary price missing"
+        )
     return heading.get_text(" ", strip=True), money[1], Decimal(money[2].replace(",", ""))
 
 
@@ -87,7 +96,7 @@ def no_availability(html: str) -> bool:
 
 
 def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRequest) -> RateData | None:
-    """Only accept a named plan matching the explicitly labelled non-member room quote."""
+    """Read only named non-member plans; never turn a room-card summary into a quote."""
     soup = BeautifulSoup(html, "html.parser")
     headings = soup.select("h5")
     if not headings:
@@ -126,6 +135,25 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
 
 class GHABrowserProvider(AccorBrowserProvider):
     session_provider = "gha"
+
+    async def _expand_rate_pages(self, page):
+        """Follow all displayed pagination controls; mobile duplicates are not progress."""
+        more = page.locator(".tid-viewMoreRates:visible")
+        try:
+            async with asyncio.timeout(45):
+                while await more.count():
+                    before = await page.locator(".tid-selectBtn:visible").count()
+                    await more.click()
+                    await page.wait_for_function(
+                        """before => Array.from(document.querySelectorAll('.tid-selectBtn'))
+                            .filter(element => !!element.getClientRects().length).length > before""",
+                        arg=before,
+                        timeout=10000,
+                    )
+        except TimeoutError as exc:
+            raise ProviderError(
+                ErrorCode.TIMEOUT, "GHA additional rate plans did not finish loading"
+            ) from exc
 
     # Reuse only browser lifecycle; all provider operations below are GHA-specific.
     async def _open_booking(self, search: RateRequest):
@@ -231,17 +259,7 @@ class GHABrowserProvider(AccorBrowserProvider):
                 room = public_room(html)
                 await button.click()
                 await page.locator(".tid-selectBtn:visible").first.wait_for()
-                more = page.locator(".tid-viewMoreRates:visible")
-                for _ in range(10):
-                    if not await more.count():
-                        break
-                    before = await page.locator(".tid-selectBtn:visible").count()
-                    await more.click()
-                    await page.wait_for_function(
-                        '(n)=>document.querySelectorAll(".tid-selectBtn").length>n*2',
-                        arg=before,
-                        timeout=5000,
-                    )
+                await self._expand_rate_pages(page)
                 cards = await page.locator(".tid-selectBtn:visible").evaluate_all(
                     "els=>els.map(e=>e.parentElement.parentElement.parentElement.outerHTML)"
                 )

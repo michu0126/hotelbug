@@ -67,6 +67,33 @@ def test_public_named_plan_below_advertised_from_price_remains_visible():
     assert rate.total_price == Decimal("1000")
 
 
+def test_capella_from_only_room_is_identity_not_a_bookable_price():
+    room_html = (
+        '<h5 class="px-5">Superior Accessible King Room</h5>'
+        "<div><span>FROM</span><h5>USD 1,189</h5></div>"
+        "<span>Including taxes and fees</span>"
+    )
+    room = public_room(room_html)
+    assert room == ("Superior Accessible King Room", "USD", Decimal("1189"))
+    assert parse_public_offer(room_html, room, SEARCH) is None
+    actual_plan = (
+        OFFER.replace("THB", "USD").replace("6,944", "1,250").replace("Avani Flexi", "Flexible Rate")
+    )
+    rate = parse_public_offer(actual_plan, room, SEARCH)
+    assert rate.total_price == Decimal("1250")
+    assert rate.room_type == "Superior Accessible King Room"
+    assert rate.rate_name == "Flexible Rate"
+    assert (
+        parse_public_offer(actual_plan.replace("Flexible Rate", "DISCOVERY Flexible Rate"), room, SEARCH)
+        is None
+    )
+
+
+def test_explicit_member_only_summary_is_not_used_as_from_fallback():
+    with pytest.raises(ProviderError):
+        public_room(ROOM.replace("NON-MEMBER RATES", "MEMBER RATES FROM"))
+
+
 @pytest.mark.parametrize("old,new", [("07 Oct", "08 Oct"), ("2026", "2027"), ("2 ADULTS", "3 ADULTS")])
 def test_stay_mismatch(old, new):
     with pytest.raises(ProviderError):
@@ -95,3 +122,32 @@ async def test_explicit_no_availability_returns_empty_quotes(monkeypatch):
 
     assert await provider.search_rates(SEARCH) == []
     page.wait_for_function.assert_awaited_once()
+
+
+async def test_rate_pagination_has_no_ten_page_truncation_or_duplicate_count_assumption():
+    provider = GHABrowserProvider()
+    page = MagicMock()
+    more = MagicMock()
+    more.count = AsyncMock(side_effect=[1] * 12 + [0])
+    more.click = AsyncMock()
+    cards = MagicMock()
+    cards.count = AsyncMock(side_effect=range(1, 13))
+    page.locator.side_effect = lambda selector: more if "viewMoreRates" in selector else cards
+    page.wait_for_function = AsyncMock()
+
+    await provider._expand_rate_pages(page)
+    assert more.click.await_count == 12
+    assert page.wait_for_function.await_count == 12
+    for call in page.wait_for_function.await_args_list:
+        assert "getClientRects" in call.args[0]
+        assert "*2" not in call.args[0]
+
+
+async def test_rate_pagination_timeout_does_not_silently_accept_partial_plans():
+    provider = GHABrowserProvider()
+    page = MagicMock()
+    page.locator.return_value.count = AsyncMock(return_value=1)
+    page.locator.return_value.click = AsyncMock()
+    page.wait_for_function = AsyncMock(side_effect=TimeoutError)
+    with pytest.raises(ProviderError, match="did not finish loading"):
+        await provider._expand_rate_pages(page)
