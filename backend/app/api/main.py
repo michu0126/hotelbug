@@ -163,7 +163,7 @@ async def dashboard(db: Db):
     midnight = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return {
         "phase": "2-preview",
-        "message": "雅高与 GHA 官网页面采集已通过单酒店 Worker 入库实测；其余集团与全球覆盖仍在验证。降价复查与 Telegram 发送链路已实现。",
+        "message": "IHG、雅高与 GHA 官网页面采集已通过开发机单酒店 Worker 入库实测；万豪、希尔顿、凯悦、群晖实采与全球覆盖仍在验证。降价复查与 Telegram 发送链路已实现。",
         "hotels": await db.scalar(select(func.count()).select_from(Hotel)),
         "rates_today": await db.scalar(
             select(func.count()).select_from(PriceHistory).where(PriceHistory.captured_at >= midnight)

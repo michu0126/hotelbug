@@ -12,6 +12,28 @@ from app.schemas.domain import JobInput, JobKind
 from app.services.jobs import enqueue, tier
 
 
+def advance_date_cursor(value: dict, today: date, horizon: int) -> tuple[date, dict]:
+    """Keep an absolute next date so crossing midnight does not skip unvisited nights."""
+    last_day = today + timedelta(days=horizon)
+    stored_date = value.get("next_check_in")
+    try:
+        check_in = date.fromisoformat(stored_date) if isinstance(stored_date, str) else None
+    except ValueError:
+        check_in = None
+    if check_in is None:
+        # Migrate existing offset-only cursors without discarding their progress.
+        offset = value.get("offset", 0)
+        if type(offset) is not int or not 0 <= offset <= horizon:
+            offset = 0
+        check_in = today + timedelta(days=offset)
+    if not today <= check_in <= last_day:
+        check_in = today
+    next_day = check_in + timedelta(days=1)
+    if next_day > last_day:
+        next_day = today
+    return check_in, {"next_check_in": next_day.isoformat(), "offset": (next_day - today).days}
+
+
 async def expand_watchlists(session: AsyncSession, settings: Settings, budget: int = 4) -> int:
     if budget < 1:
         return 0
@@ -53,14 +75,13 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
             continue
         cursor_key = f"watch_cursor:{watch.id}"
         cursor = await session.get(AppSetting, cursor_key)
-        offset = cursor.value.get("offset", 0) if cursor else 0
-        if type(offset) is not int or not 0 <= offset <= horizon:
-            offset = 0
+        today = date.today()
+        check_in, next_value = advance_date_cursor(cursor.value if cursor else {}, today, horizon)
         if cursor:
-            cursor.value = {"offset": (offset + 1) % (horizon + 1)}
+            cursor.value = next_value
         else:
-            session.add(AppSetting(key=cursor_key, value={"offset": (offset + 1) % (horizon + 1)}))
-        check_in = date.today() + timedelta(days=offset)
+            session.add(AppSetting(key=cursor_key, value=next_value))
+        offset = (check_in - today).days
         kind = tier(offset)
         hours = {
             "HOT": settings.hot_interval_hours,
@@ -129,15 +150,13 @@ async def expand_global(session: AsyncSession, settings: Settings) -> int:
             continue
         cursor_key = f"global_date_cursor:{hotel.id}"
         cursor = await session.get(AppSetting, cursor_key)
-        offset = cursor.value.get("offset", 0) if cursor else 0
-        if type(offset) is not int or not 0 <= offset < 365:
-            offset = 0
-        next_value = {"offset": (offset + 1) % 365}
+        today = date.today()
+        check_in, next_value = advance_date_cursor(cursor.value if cursor else {}, today, 364)
         if cursor:
             cursor.value = next_value
         else:
             session.add(AppSetting(key=cursor_key, value=next_value))
-        check_in = date.today() + timedelta(days=offset)
+        offset = (check_in - today).days
         temperature = tier(offset)
         hours = {
             "HOT": settings.hot_interval_hours,
