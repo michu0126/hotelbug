@@ -4,7 +4,13 @@ from decimal import Decimal
 import pytest
 
 from app.core.errors import ProviderError
-from app.providers.ihg_page import parse_hotel, parse_room, verify_displayed_stay
+from app.providers.ihg_page import (
+    WINDOW_CLOSED,
+    booking_window_closed,
+    parse_hotel,
+    parse_room,
+    verify_displayed_stay,
+)
 from app.schemas.domain import RateRequest
 
 SEARCH = RateRequest(provider_hotel_id="LONLS", check_in=date(2026, 10, 20), check_out=date(2026, 10, 21))
@@ -94,3 +100,23 @@ def test_rendered_stay_and_official_hotel_metadata():
         f"<h1>{HOTEL}</h1>", "https://www.ihg.com/hotelindigo/hotels/us/en/london/lonls/hoteldetail"
     )
     assert hotel.provider_hotel_id == "LONLS" and hotel.hotel_name == HOTEL
+
+
+def window_html():
+    return f'<h2 data-testid="hotelDetailsInfoHotelName">{HOTEL}</h2><p>{WINDOW_CLOSED}</p>' + (
+        '<a href="https://www.ihg.com/hotelindigo/hotels/us/en/london/lonls/hoteldetail/hotel-reviews">Reviews</a>'
+    )
+
+
+def test_not_open_requires_explicit_message_full_dates_and_hotel_identity():
+    dates, guests = ["10/20/2026", "10/21/2026"], "1 Room, 2 Guests"
+    assert booking_window_closed(window_html(), SEARCH, HOTEL, dates, guests)
+    assert not booking_window_closed(
+        window_html().replace(WINDOW_CLOSED, "0 rooms found"), SEARCH, HOTEL, dates, guests
+    )
+    with pytest.raises(ProviderError):
+        booking_window_closed(
+            window_html().replace("lonls/hoteldetail", "lonhb/hoteldetail"), SEARCH, HOTEL, dates, guests
+        )
+    with pytest.raises(ProviderError):
+        booking_window_closed(window_html(), SEARCH, HOTEL, ["10/20/2027", "10/21/2027"], guests)

@@ -38,8 +38,12 @@ async def main():
     )
     mode.add_argument("--headless", action="store_true", help="Explicitly test the headless comparison mode")
     parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 10, 7))
-    parser.add_argument(
+    expected = parser.add_mutually_exclusive_group()
+    expected.add_argument(
         "--expect-empty", action="store_true", help="Require a successful no-availability job"
+    )
+    expected.add_argument(
+        "--expect-not-open", action="store_true", help="Require a verified not-yet-bookable response"
     )
     args = parser.parse_args()
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
@@ -170,10 +174,16 @@ async def main():
                     ),
                     flush=True,
                 )
-                expected_status = "UNAVAILABLE" if args.expect_empty else "AVAILABLE"
+                expected_status = (
+                    "NOT_OPEN"
+                    if args.expect_not_open
+                    else "UNAVAILABLE"
+                    if args.expect_empty
+                    else "AVAILABLE"
+                )
                 if (
                     job.status != "SUCCEEDED"
-                    or (count == 0) != args.expect_empty
+                    or (count == 0) != (args.expect_empty or args.expect_not_open)
                     or day_status != expected_status
                 ):
                     raise SystemExit(2)

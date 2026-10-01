@@ -9,6 +9,8 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.accor_browser import AccorBrowserProvider
 from app.providers.ihg_page import (
+    WINDOW_CLOSED,
+    booking_window_closed,
     parse_hotel,
     parse_room,
     property_identity,
@@ -145,8 +147,23 @@ class IHGBrowserProvider(AccorBrowserProvider):
             await page.get_by_role("button", name="View prices", exact=True).click()
             await page.wait_for_url("**/find-hotels/select-roomrate?**", wait_until="commit", timeout=45000)
             stage = "room results"
-            await page.get_by_test_id("roomNameTestId").first.wait_for(state="visible", timeout=45000)
+            await page.wait_for_function(
+                """message => [...document.querySelectorAll('[data-testid="roomNameTestId"]')]
+                    .some(e => e.getClientRects().length) || (document.body?.innerText || '').includes(message)""",
+                arg=WINDOW_CLOSED,
+                timeout=45000,
+            )
             await self._check_access(page)
+            if booking_window_closed(
+                await page.content(),
+                request,
+                hotel.hotel_name,
+                await page.locator("input.calendar-input").evaluate_all("es => es.map(e => e.value)"),
+                await page.locator("#room-and-guest").input_value(),
+            ):
+                raise ProviderError(
+                    ErrorCode.BOOKING_WINDOW_CLOSED, "IHG has not opened booking for these stay dates"
+                )
             await self._verify_stay(page, request, hotel.hotel_name)
             cards = page.locator('app-room-rate-item[id^="ROOM_CODE"]')
             ids = await cards.evaluate_all("es => es.map(e => e.id)")

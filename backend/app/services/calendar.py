@@ -61,11 +61,11 @@ def calendar_rows(
         choices = by_day.get(day, [])
         best = min(choices, key=lambda r: (displayed_price(r), r.offer_key)) if choices else None
         scan = scans_by_day.get(day)
-        if scan and scan.status == "UNAVAILABLE":
+        if scan and scan.status in ("UNAVAILABLE", "NOT_OPEN"):
             observed = as_utc(scan.observed_at)
             captured = as_utc(best.captured_at) if best else None
             if captured is None or observed >= captured:
-                days.append({"date": day.isoformat(), "status": "UNAVAILABLE"})
+                days.append({"date": day.isoformat(), "status": scan.status})
                 continue
         if not best:
             days.append({"date": day.isoformat(), "status": "NO_DATA"})

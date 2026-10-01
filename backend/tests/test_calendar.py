@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import func, select
 from test_domain import fixture_rate
 
@@ -92,7 +93,8 @@ async def test_displayed_only_calendar_and_history_are_separate_from_total(sessi
         assert day["offer_key"] != original.offer_key()
 
 
-async def test_empty_successful_scan_hides_stale_price_and_keeps_history(sessions):
+@pytest.mark.parametrize("empty_status", ["UNAVAILABLE", "NOT_OPEN"])
+async def test_empty_successful_scan_hides_stale_price_and_keeps_history(sessions, empty_status):
     async with sessions() as db, db.begin():
         hotel = await upsert_hotel(
             db,
@@ -112,14 +114,22 @@ async def test_empty_successful_scan_hides_stale_price_and_keeps_history(session
         assert (await get_calendar(db, hotel, "2027-01"))["days"][6]["status"] == "AVAILABLE"
 
         await finalize_stay_scan(
-            db, hotel, rate.check_in, rate.check_out, rate.adults, rate.rooms, [], "empty-job"
+            db,
+            hotel,
+            rate.check_in,
+            rate.check_out,
+            rate.adults,
+            rate.rooms,
+            [],
+            "empty-job",
+            empty_status=empty_status,
         )
         day = (await get_calendar(db, hotel, "2027-01"))["days"][6]
-        assert day == {"date": "2027-01-07", "status": "UNAVAILABLE"}
+        assert day == {"date": "2027-01-07", "status": empty_status}
         current = await db.scalar(select(Rate))
         assert not current.availability and current.total_price is None
         assert await db.scalar(select(func.count()).select_from(PriceHistory)) == 1
-        assert (await db.scalar(select(StayScan))).status == "UNAVAILABLE"
+        assert (await db.scalar(select(StayScan))).status == empty_status
 
         renewed = rate.model_copy(
             update={

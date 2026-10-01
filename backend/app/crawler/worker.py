@@ -155,7 +155,34 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                 state.requests_today + 1
             )
             state.requests_today += 1
-            if error:
+            if (
+                error
+                and error.code == ErrorCode.BOOKING_WINDOW_CLOSED
+                and hotel is not None
+                and job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY)
+            ):
+                # A verified official "not yet bookable" response is neither a
+                # transport failure nor unavailable inventory. Keep monitoring
+                # this stay on the normal schedule, without poisoning the group.
+                await finalize_stay_scan(
+                    session,
+                    hotel,
+                    job.check_in,
+                    job.check_out,
+                    job.payload.get("adults", 2),
+                    job.payload.get("rooms", 1),
+                    [],
+                    job.id,
+                    empty_status="NOT_OPEN",
+                )
+                if job.kind == JobKind.VERIFY_ANOMALY:
+                    await confirm_drop(session, job.payload.get("alert_id", ""), job.id, [])
+                current.status = "SUCCEEDED"
+                current.error_type, current.error_message = error.code, redact(str(error))
+                state.status, state.last_error, state.blocked_until = "ONLINE", None, None
+                state.success_count += 1
+                state.last_success = utcnow()
+            elif error:
                 current.retry_count += 1
                 current.error_type, current.error_message = error.code, redact(str(error))
                 transient = error.code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR, ErrorCode.RATE_LIMITED)

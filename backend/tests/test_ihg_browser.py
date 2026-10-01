@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import func, select
-from test_ihg_page import HOTEL, SEARCH, URL, room_html
+from test_ihg_page import HOTEL, SEARCH, URL, room_html, window_html
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode, ProviderError
 from app.crawler.worker import process_one
-from app.models.tables import CrawlJob, PriceHistory, ProviderStatus
+from app.models.tables import CrawlJob, NotificationLog, PriceHistory, ProviderStatus
 from app.providers.ihg_browser import SAMPLE_URL, IHGBrowserProvider
 from app.providers.registry import FACTORIES
 from app.schemas.domain import HotelData, JobInput, JobKind
@@ -90,7 +90,7 @@ async def test_expands_every_room_and_waits_for_public_cards(monkeypatch):
     rates = await provider.search_rates(SEARCH)
     assert page.expanded == ["OAAN", "OQNN"]
     assert page.public == [("OAAN", False), ("OQNN", False)]
-    assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list[1:]] == [
+    assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list[2:]] == [
         "ROOM_CODEOAAN",
         "ROOM_CODEOQNN",
     ]
@@ -134,6 +134,54 @@ async def test_displayed_date_mismatch_fails_before_quote_collection(monkeypatch
     with pytest.raises(ProviderError) as caught:
         await provider.search_rates(SEARCH)
     assert caught.value.code == ErrorCode.INVALID_RESPONSE and not page.expanded
+
+
+async def test_closed_booking_window_is_not_transport_timeout(monkeypatch):
+    provider, page, _ = provider_with_page(monkeypatch)
+    page.content = AsyncMock(return_value=window_html())
+    # The real IHG response clears the booking URL query string.
+    page.url = URL.split("?")[0]
+    with pytest.raises(ProviderError) as caught:
+        await provider.search_rates(SEARCH)
+    assert caught.value.code == ErrorCode.BOOKING_WINDOW_CLOSED and not page.expanded
+
+
+async def test_worker_records_not_open_without_quotes_or_provider_failure(sessions, queue, monkeypatch):
+    class RecordedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 30)
+
+    monkeypatch.setattr(jobs, "date", RecordedDate)
+    monkeypatch.setenv("IHG_ENABLED", "true")
+    provider, page, metadata = provider_with_page(monkeypatch)
+    page.content = AsyncMock(return_value=window_html())
+    page.url = URL.split("?")[0]
+    monkeypatch.setitem(FACTORIES, "ihg", lambda: provider)
+    async with sessions() as session, session.begin():
+        hotel = await upsert_hotel(session, metadata)
+        job = await enqueue(
+            session,
+            JobInput(
+                provider="ihg",
+                kind=JobKind.FETCH_RATE,
+                hotel_id=hotel.id,
+                check_in=SEARCH.check_in,
+                check_out=SEARCH.check_out,
+            ),
+        )
+        job_id = job.id
+    await queue.put(job_id, 50)
+    assert await process_one(sessions, queue, Settings())
+    async with sessions() as session:
+        job = await session.get(CrawlJob, job_id)
+        assert job.status == "SUCCEEDED" and job.error_type == "BOOKING_WINDOW_CLOSED"
+        assert job.retry_count == 0
+        state = await session.get(ProviderStatus, "ihg")
+        assert state.status == "ONLINE" and state.failure_count == 0 and state.blocked_until is None
+        assert await session.scalar(select(func.count()).select_from(PriceHistory)) == 0
+        assert await session.scalar(select(func.count()).select_from(NotificationLog)) == 0
+        assert (await get_calendar(session, hotel, "2026-10"))["days"][19]["status"] == "NOT_OPEN"
 
 
 async def test_ihg_worker_persists_cash_quotes_and_calendar(sessions, queue, monkeypatch):

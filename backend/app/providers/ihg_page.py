@@ -12,6 +12,7 @@ from app.schemas.domain import HotelData, RateData, RateRequest
 
 PROPERTY_PATH = re.compile(r"/([a-z0-9-]+)/hotels/([a-z]{2})/en/([a-z0-9-]+)/([a-z0-9]{5})/hoteldetail/?")
 AMOUNT = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?")
+WINDOW_CLOSED = "Rooms cannot be booked this far in advance. Please change dates."
 
 
 def property_identity(url: str):
@@ -73,6 +74,26 @@ def verify_displayed_stay(html: str, request: RateRequest, hotel_name: str, date
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG displayed stay dates mismatch")
     if guests != f"1 Room, {request.adults} Guest" + ("s" if request.adults != 1 else ""):
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG displayed guest count mismatch")
+
+
+def booking_window_closed(
+    html: str, request: RateRequest, hotel_name: str, dates: list[str], guests: str
+) -> bool:
+    soup = BeautifulSoup(html, "html.parser")
+    if WINDOW_CLOSED not in soup.get_text(" ", strip=True):
+        return False
+    # IHG removes URL query parameters for this response. Still require the
+    # rendered full-year dates, hotel and occupancy before recording its status.
+    verify_displayed_stay(html, request, hotel_name, dates, guests)
+    identities = []
+    for link in soup.select('a[href*="/hoteldetail/hotel-reviews"]'):
+        url = urlparse(link.get("href", ""))
+        identity = PROPERTY_PATH.fullmatch(url.path.removesuffix("/hotel-reviews"))
+        if url.scheme == "https" and url.hostname == "www.ihg.com" and identity:
+            identities.append(identity[4].upper())
+    if set(identities) != {request.provider_hotel_id.upper()}:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG booking-window hotel code not confirmed")
+    return True
 
 
 def parse_room(html: str, request: RateRequest, url: str, room_code: str) -> list[RateData]:

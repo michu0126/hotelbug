@@ -63,8 +63,12 @@ async def finalize_stay_scan(
     rooms: int,
     rates: list[RateData],
     job_id: str,
+    empty_status: str = "UNAVAILABLE",
 ) -> None:
     """Retire offers absent from a successful new scan, including an empty stay."""
+    if empty_status not in ("UNAVAILABLE", "NOT_OPEN"):
+        raise ValueError("Invalid empty stay status")
+    scan_status = "AVAILABLE" if rates else empty_status
     observed_at = max((rate.captured_at for rate in rates), default=utcnow())
     current_scan = await session.scalar(
         select(StayScan)
@@ -83,7 +87,7 @@ async def finalize_stay_scan(
             previous = previous.replace(tzinfo=timezone.utc)
         if previous > observed_at:
             return
-        current_scan.status = "AVAILABLE" if rates else "UNAVAILABLE"
+        current_scan.status = scan_status
         current_scan.observed_at = observed_at
         current_scan.job_id = job_id
     else:
@@ -94,7 +98,7 @@ async def finalize_stay_scan(
                 check_out=check_out,
                 adults=adults,
                 rooms=rooms,
-                status="AVAILABLE" if rates else "UNAVAILABLE",
+                status=scan_status,
                 observed_at=observed_at,
                 job_id=job_id,
             )
