@@ -98,6 +98,8 @@ async def test_catalog_api_distinguishes_discovery_from_actual_quote_coverage(se
                 value={
                     "pages": {"root": {"status": "SUCCEEDED"}, "leaf": {"status": "PARTIAL"}, "todo": {}},
                     "last_error": "DIRECTORY_PARTIAL",
+                    "urls": ["already-accepted-hotel"],
+                    "cursor": 1,
                 },
             )
         )
@@ -117,6 +119,7 @@ async def test_catalog_api_distinguishes_discovery_from_actual_quote_coverage(se
             assert ihg["hotels"] == 1 and ihg["hotels_with_quotes"] == 0
             assert ihg["parsed_directory_pages"] == 2 and ihg["directory_pages"] == 3
             assert ihg["partial_directory_pages"] == 1 and ihg["last_error"] == "DIRECTORY_PARTIAL"
+            assert ihg["hotel_candidates"] == 0 and ihg["candidate_tasks_dispatched"] == 0
     finally:
         app.dependency_overrides.clear()
 

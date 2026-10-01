@@ -220,7 +220,13 @@ async def catalogs(db: Db):
         data = row.value if row else {}
         pages = list(data.get("pages", {}).values())
         maps = data.get("maps", [])
-        candidates = data.get("codes", []) if provider == ProviderName.ACCOR else data.get("urls", [])
+        candidates = (
+            data.get("codes", [])
+            if provider == ProviderName.ACCOR
+            else data.get("urls", [])
+            if provider in {ProviderName.GHA, ProviderName.HILTON}
+            else []
+        )
         missing_maps = len(data.get("missing_maps", []))
         map_count = len(maps) if provider != ProviderName.ACCOR else int(bool(candidates))
         maps_read = (
