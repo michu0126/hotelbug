@@ -1,10 +1,11 @@
 from datetime import date
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.core.errors import ProviderError
-from app.providers.accor_browser import parse_public_rates
+from app.providers.accor_browser import AccorBrowserProvider, parse_public_rates
 from app.schemas.domain import RateRequest
 
 
@@ -57,3 +58,24 @@ def test_accor_rejects_mismatched_or_ambiguous_quote(old, new):
 def test_accor_wrong_property_rejected():
     with pytest.raises(ProviderError):
         parse_public_rates(rendered_page(), request(), "https://all.accor.com/booking/en/accor/hotel/0339")
+
+
+async def test_booking_navigation_waits_for_commit_then_verifiable_offers(monkeypatch):
+    provider = AccorBrowserProvider()
+    page = MagicMock()
+    control = MagicMock()
+    control.filter.return_value = control
+    control.first = control
+    control.get_by_role.return_value = control
+    for action in ("fill", "press", "click", "wait_for"):
+        setattr(control, action, AsyncMock())
+    page.locator.return_value = control
+    page.get_by_role.return_value = control
+    page.wait_for_url = AsyncMock()
+    page.content = AsyncMock(return_value=rendered_page())
+    page.url = "https://all.accor.com/booking/en/accor/hotel/0338"
+    monkeypatch.setattr(provider, "_open", AsyncMock(return_value=page))
+    rates = await provider.search_rates(request())
+    assert len(rates) == 1 and rates[0].total_price == Decimal("96.47")
+    page.wait_for_url.assert_awaited_once_with("**/booking/**", wait_until="commit", timeout=45000)
+    control.wait_for.assert_awaited_once_with(state="visible", timeout=45000)

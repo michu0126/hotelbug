@@ -234,7 +234,9 @@ class AccorBrowserProvider(HotelProvider):
             stage = "search submission"
             await form.get_by_role("button", name="See rates", exact=True).click()
             stage = "booking navigation"
-            await page.wait_for_url("**/booking/**")
+            # Booking controls can be ready while unrelated resources prevent
+            # the full load event. Wait for navigation, then the real offers.
+            await page.wait_for_url("**/booking/**", wait_until="commit", timeout=45000)
             stage = "public offers"
             await page.locator(
                 "label.hotel-accommodation-offers-content__label .offer-price--alternative"

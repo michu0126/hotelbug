@@ -43,6 +43,13 @@ Provider ONLINE、日历 AVAILABLE。测试独立临时数据库，无 Telegram 
 新版再次真实查询 Capella Taipei 同日期，仍成功入库17条；美国 Viceroy Santa Monica
 同为2026-10-20 / 10-21的正式 Worker 回归成功入库34条，Provider ONLINE、日历 AVAILABLE。
 
+2026-10-01 全球目录自动选店链路追加实测：`smoke_sitemap_pipeline.py --provider gha`
+正常读取官网索引与第一个子地图，由生产目录调度器自行选中
+`https://www.ghadiscovery.com/adeera/atheel-kafd-hotel`，没有手工输入酒店代码或日期。
+真实酒店资料任务确认 Atheel KAFD Hotel、hotelId 299035；随后生产 `expand_global`
+自动生成2026-10-01 / 10-02的查价任务，正式 Worker 成功入库14条 PriceHistory。
+目录阶段零报价，未向 Telegram 发送消息；隔离临时数据库，不是群晖安装或全目录采价验收。
+
 ## 早期接口观察（历史记录，不是当前实现依赖）
 状态：Python适配尚未实现；Phase6。旧Node页面采集器独立保留。
 官网入口：https://www.ghadiscovery.com/；酒店详情→BOOK NOW→预订页。

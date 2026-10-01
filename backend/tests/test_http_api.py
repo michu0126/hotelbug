@@ -121,6 +121,46 @@ async def test_catalog_api_distinguishes_discovery_from_actual_quote_coverage(se
         app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize("provider", ["gha", "hilton", "accor"])
+async def test_catalog_api_reports_sitemap_candidates_without_fake_hotel_counts(sessions, provider):
+    from app.models.tables import AppSetting
+
+    data = (
+        {"codes": ["0338", "B5L7"], "cursor": 1}
+        if provider == "accor"
+        else {
+            "maps": ["one", "two", "three"],
+            "map_cursor": 2,
+            "missing_maps": ["one"],
+            "urls": ["property-one", "property-two"],
+            "cursor": 1,
+        }
+    )
+    async with sessions() as db, db.begin():
+        db.add(AppSetting(key="catalog:" + provider, value=data))
+
+    async def dependency():
+        async with sessions() as db:
+            yield db
+
+    app.dependency_overrides[get_session] = dependency
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/catalogs")
+            assert response.status_code == 200
+            item = next(row for row in response.json() if row["provider"] == provider)
+            assert item["source"] == "OFFICIAL_SITEMAP"
+            assert item["hotels"] == 0 and item["hotels_with_quotes"] == 0
+            assert item["hotel_candidates"] == 2 and item["candidate_tasks_dispatched"] == 1
+            assert item["sitemaps_total"] == (1 if provider == "accor" else 3)
+            assert item["sitemaps_read"] == 1
+            assert item["sitemaps_missing"] == (0 if provider == "accor" else 1)
+    finally:
+        app.dependency_overrides.clear()
+
+
 async def test_watchlist_create_and_update_via_api(sessions, monkeypatch):
     monkeypatch.setattr(settings, "admin_token", SecretStr("test-only"))
     async with sessions() as db, db.begin():

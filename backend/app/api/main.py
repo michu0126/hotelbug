@@ -219,6 +219,15 @@ async def catalogs(db: Db):
         row = await db.get(AppSetting, "catalog:" + provider.value)
         data = row.value if row else {}
         pages = list(data.get("pages", {}).values())
+        maps = data.get("maps", [])
+        candidates = data.get("codes", []) if provider == ProviderName.ACCOR else data.get("urls", [])
+        missing_maps = len(data.get("missing_maps", []))
+        map_count = len(maps) if provider != ProviderName.ACCOR else int(bool(candidates))
+        maps_read = (
+            max(0, min(len(maps), data.get("map_cursor", 0)) - missing_maps)
+            if provider != ProviderName.ACCOR
+            else int(bool(candidates))
+        )
         result.append(
             {
                 "provider": provider.value,
@@ -240,6 +249,11 @@ async def catalogs(db: Db):
                 "parsed_directory_pages": sum(p.get("status") in {"SUCCEEDED", "PARTIAL"} for p in pages),
                 "partial_directory_pages": sum(p.get("status") == "PARTIAL" for p in pages),
                 "failed_directory_pages": sum(p.get("status") == "FAILED" for p in pages),
+                "sitemaps_total": map_count,
+                "sitemaps_read": maps_read,
+                "sitemaps_missing": missing_maps,
+                "hotel_candidates": len(candidates),
+                "candidate_tasks_dispatched": min(len(candidates), data.get("cursor", 0)),
                 "last_error": data.get("last_error"),
             }
         )
