@@ -29,7 +29,7 @@ async def main():
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Error:
                 pass
-            print("title=", await page.title(), flush=True)
+            print("title=", ascii(await page.title()), flush=True)
             if args.forms:
                 forms = await page.locator(
                     'input[name="search.dateIn"], input[name="search.dateOut"]'

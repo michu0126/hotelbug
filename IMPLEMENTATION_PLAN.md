@@ -14,7 +14,7 @@
 | 2 | 只实现 Marriott，搜索/详情/房价/历史/日历 | 进行中：浏览器官网真报价请求/字段已验证，解析器/历史/日历/单酒店Watchlist已开发；独立HTTP及NAS仍未验收，全球批量发现未完成 |
 | 3 | 中位数基线、评分、历史低价、二次确认、通知 | 已实现同报价历史每日中位数、50%降幅、复查任务及Telegram持久化发送；模拟服务集成测试通过，真实机器人投递待验证 |
 | 4 | Vue 完整业务 Dashboard / 搜索 / 日历 / 趋势 / 配置 | 待开始；Phase 1 仅提供真实基础状态页 |
-| 5 | Hilton / Hyatt / IHG 独立适配 | 希尔顿官网目录、页面适配与 Worker 已接入，离线链路通过；独立浏览器实采403，IHG/Hyatt适配仍未完成 |
+| 5 | Hilton / Hyatt / IHG 独立适配 | IHG 普通浏览器真实任务42条报价入库，Linux/NAS待验收；希尔顿目录/适配已接入但实采受拒；Hyatt适配尚未完成 |
 | 6 | Accor / GHA 独立适配 | 页面适配与全球目录已接入；多酒店真实 Worker 任务通过，全球酒店和NAS采价仍未全量验收 |
 | 7 | 缓存、优先级、公平性、压测、运行监控 | 待开始 |
 
@@ -105,7 +105,7 @@ Telegram/Bark/Webhook 优先；Email 后续。通知失败走持久化重试，�
 镜像 Python3.12 slim，基础阶段不安装 Chromium，减少内存；Vue 编译产物由 Nginx 提供。
 所有配置通过环境变量，时区默认 Asia/Shanghai，数据 /data、日志 /logs，标准输出结构化 JSON 并轮转。
 Alembic 仅 API 启动时迁移，Worker/Scheduler 等待健康依赖，避免多进程同时迁移。
-默认发布将 `latest` 指向新版前端、`api-latest` 指向新版 API/Worker/Scheduler。旧 Node 版固定为 `sha-f34ff15` 并保留原数据卷，不能仅拉取 `latest` 升级旧两服务 Compose。
+默认发布将 `latest` 指向新版前端、`api-latest` 指向新版 API/Scheduler，`worker-latest` 指向带 Chromium 与内部虚拟显示器的 Worker。旧 Node 版固定为 `sha-f34ff15` 并保留原数据卷，不能仅拉取 `latest` 升级旧两服务 Compose。
 amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 测试 Compose：启动依赖→迁移→API ready→投递 fixture 任务→worker处理→重启/Redis丢失恢复→容器健康。
 开发机没有 Docker，真实 Docker 验证由 GitHub Actions 执行；没有成功记录前不标为通过。
@@ -116,7 +116,7 @@ amd64 必测；arm64 暂只作为设计兼容，不声称实测支持。
 | 集团 | 已有证据 | 下一步；明确禁止猜接口 |
 | --- | --- | --- |
 | Marriott | 官网正常表单实测 2026-10-07/08、NYCMQ，酒店列表和55条房型报价200；详情、报价GraphQL均已记录 | 独立HTTP首页403、报价POST连接失败；NAS出口验收，不能把浏览器成功等同自动采集成功；阻塞时标BLOCKED/DEGRADED |
-| IHG | robots可读，旧redirect样本403 | 从集团官网实际搜索流程抓取请求；先证实日期、品牌、税费，不直接沿用旧URL |
+| IHG | LONLS 普通浏览器独立 Worker 任务两次成功写入42条公开价；日历、降价复查支持税费未确认的展示价 | 内置显示器运行检查、Linux/NAS官网采价、全球酒店目录和长期稳定性；不能将Windows单酒店样本等同全球完成 |
 | Hyatt | robots429，房价页403/E6020 | 暂停并记录；正常访问恢复后研究公开请求，无绕过 |
 | Hilton | 普通Chrome真实含税公开价和稳定房型/方案ID已验证；542个酒店子地图目录已接入，独立浏览器仍403 | 页面适配器与Worker已注册；继续解决独立会话访问与NAS实采，不能把离线入库或目录可读当成实采成功 |
 | Accor | 多酒店真实官网任务已入库，近一年上限日期可查；延迟Cookie弹窗遮挡脚本问题已修正 | 全球目录逐一验证、Linux/NAS真实查价和稳定性验收 |

@@ -12,6 +12,7 @@
 - 雅高浏览器采集器已接入 Worker：新加坡酒店 2027-09-28 的真实任务成功写入 4 条非会员含税报价。全球目录已发现 5,899 个雅高页面链接，尚未批量导入和验证。
 - GHA 浏览器采集器已接入 Worker：有房日期可写入公开非会员报价，官网明确无房的日期标记为 UNAVAILABLE，不再把旧报价展示为当前可售。全球目录发现约 825 个页面链接，尚未批量验证。
 - 希尔顿官网目录与浏览器适配器已接入 Worker：逐房型读取含税公开价，排除会员价，按真实房型/方案编号保存。官网索引筛出 542 个酒店子地图，目录任务已通过真实 XML 测试；独立浏览器报价仍返回 403，自动查价未通过，不能把开关已启用当作成功。
+- IHG 官网页面适配器已接入 Worker：伦敦 LONLS 的独立普通浏览器任务两次成功入库 42 条公开非会员报价，日历可见；修正加载等待、人数控件点击和展示价被忽略的问题。Docker Worker 内置虚拟显示器，IHG 默认普通浏览器模式。全球目录、Linux/NAS 官网采价与长期稳定性仍待验收。
 - 历史中位数降价判断、二次抓取确认、Telegram 重试队列和全年酒店轮询已实现；真实机器人送达、六集团全球数据、Linux浏览器/NAS实采仍待验收。
 - [实施计划](IMPLEMENTATION_PLAN.md) / [Provider 研究记录](docs/providers/)。
 
@@ -27,7 +28,7 @@ Docker Hub 的 `michu0126/hotelbug:latest` 是前端镜像；API 和 Scheduler �
 
 ## 新版部署
 
-Intel/AMD x86_64 群晖；当前只构建 amd64，ARM64尚未验证。独立 `worker` 构建目标包含 Chromium，API和Scheduler镜像不安装浏览器。浏览器采集建议 NAS 至少预留2GB内存，实际消耗以部署监测为准。
+Intel/AMD x86_64 群晖；当前只构建 amd64，ARM64尚未验证。独立 `worker` 构建目标包含 Chromium 与内置虚拟显示器，API和Scheduler镜像不安装浏览器。显示器仅容器内部使用，无需额外端口或用户桌面连接。浏览器采集建议 NAS 至少预留2GB内存，实际消耗以部署监测为准。
 
 ```bash
 git clone https://github.com/michu0126/hotelbug.git
@@ -64,6 +65,8 @@ Telegram 可在网页设置，也可使用 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_
 雅高和 GHA 采集分别启用 `ACCOR_ENABLED=true`、`GHA_ENABLED=true`。可选 `BROWSER_PROXY_URL=http://路由器地址:代理端口`；Telegram 默认使用同一出口，可用 `TELEGRAM_PROXY_URL` 单独指定。发送实现遵循 [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)。
 
 希尔顿可用 `HILTON_ENABLED=true` 启用已注册的官网目录/页面适配器，但当前独立采集会话仍未获得报价访问，状态字段明确标为 `PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED`。其目录候选按酒店主页逐一验证，不将 sitemap 页面数量当成已收录酒店数。万豪、IHG、凯悦及六集团全量价格验收仍未完成。
+
+IHG 可用 `IHG_ENABLED=true` 启用，在网页选择 IHG 并粘贴英文酒店详情页（如 `https://www.ihg.com/hotelindigo/hotels/us/en/london/lonls/hoteldetail`）提交资料任务。已收录酒店由现有 Scheduler 轮询一年内日期。价格为官网展开方案的每晚公开展示现金价；若全部税费不能确认，会在日历/通知中明确标注，并且不会与含税费总价混做降幅比较。单酒店成功不代表全球酒店目录已经自动收录。
 
 Worker 为每个集团保留独立浏览器会话，任务结束只关闭当前查询页，不再每次重建空白浏览器。会话自动保存在现有 `app-data` 卷的 `/data/browser-sessions`，无需新增环境变量；正常重启后仍保留网站状态，集团和代理出口之间隔离。会话文件可能包含网站 Cookie，请勿上传或公开。此修改不代表其他集团的报价访问已经恢复。
 

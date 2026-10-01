@@ -54,6 +54,13 @@ def test_points_not_cash():
     assert result.cash_price is None and result.points_price == 20000
 
 
+def test_displayed_only_prices_never_share_all_fees_total_history():
+    rate = fixture_rate()
+    displayed = rate.model_copy(update={"total_price": None, "tax": None})
+    assert displayed.offer_key() != rate.offer_key()
+    assert displayed.model_copy(update={"cash_price": Decimal("25")}).offer_key() == displayed.offer_key()
+
+
 def test_dates_and_tiers():
     RateRequest(provider_hotel_id="x", check_in="2026-12-31", check_out="2027-01-01")
     assert [tier(n) for n in (0, 30, 31, 90, 91, 365)] == ["HOT", "HOT", "WARM", "WARM", "COLD", "COLD"]

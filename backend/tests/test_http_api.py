@@ -51,6 +51,7 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert len(states) == 6
             assert [s["provider"] for s in states if s["implemented"]] == [
                 "marriott",
+                "ihg",
                 "hilton",
                 "accor",
                 "gha",
@@ -58,6 +59,10 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert (
                 next(s for s in states if s["provider"] == "hilton")["verification"]
                 == "PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED"
+            )
+            assert (
+                next(s for s in states if s["provider"] == "ihg")["verification"]
+                == "PUBLIC_PAGE_SAMPLE_VERIFIED"
             )
             assert not any(s["enabled"] for s in states)
             result = await client.post(

@@ -145,10 +145,12 @@ class AccorBrowserProvider(HotelProvider):
         proxy_server: str | None = None,
         browser_channel: str | None = None,
         session_dir: str | None = None,
+        headless: bool = True,
     ):
         self.proxy_server = proxy_server
         self.browser_channel = browser_channel
         self.session_dir = session_dir
+        self.headless = headless
         self._page = None
 
     async def _get_page(self):
@@ -158,6 +160,7 @@ class AccorBrowserProvider(HotelProvider):
                 proxy_server=self.proxy_server,
                 browser_channel=self.browser_channel,
                 session_dir=self.session_dir,
+                headless=self.headless,
             )
             self._page.set_default_timeout(30000)
 

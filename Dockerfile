@@ -13,13 +13,18 @@ CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.api.main:app --host 0
 
 FROM api AS worker
 USER root
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright DISPLAY=:99
 RUN pip install --no-cache-dir -r requirements-browser.txt \
     && python -m playwright install --with-deps chromium \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends xvfb \
+    && apt-get clean \
     && mkdir -p /home/hotelbug \
     && usermod -d /home/hotelbug hotelbug \
     && chown -R hotelbug:hotelbug /ms-playwright /home/hotelbug
+COPY --chown=hotelbug:hotelbug docker/worker-entrypoint.sh /app/worker-entrypoint.sh
 USER hotelbug
+ENTRYPOINT ["sh", "/app/worker-entrypoint.sh"]
 CMD ["python", "-m", "app.crawler.worker"]
 
 FROM node:22-alpine AS frontend-build

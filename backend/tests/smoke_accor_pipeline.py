@@ -28,10 +28,15 @@ from app.services.queue import Queue
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--proxy")
-    parser.add_argument("--provider", choices=("accor", "gha", "hilton"), default="accor")
+    parser.add_argument("--provider", choices=("accor", "gha", "hilton", "ihg"), default="accor")
     parser.add_argument("--official-url", help="Official GHA/Hilton sitemap property URL for discovery")
     parser.add_argument("--code", help="Official hotel code for a single live pipeline test")
     parser.add_argument("--diagnostics", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--headed", action="store_true", help="Compare a fresh visible test browser against headless mode"
+    )
+    mode.add_argument("--headless", action="store_true", help="Explicitly test the headless comparison mode")
     parser.add_argument("--date", type=date.fromisoformat, default=date(2026, 10, 7))
     parser.add_argument(
         "--expect-empty", action="store_true", help="Require a successful no-availability job"
@@ -40,16 +45,26 @@ async def main():
     os.environ.update(ACCOR_ENABLED="true", ACCOR_RATE_LIMIT_SECONDS="1", BROWSER_CHANNEL="chrome")
     os.environ[args.provider.upper() + "_ENABLED"] = "true"
     os.environ[args.provider.upper() + "_RATE_LIMIT_SECONDS"] = "1"
-    provider_code = args.code or {"accor": "0338", "gha": "10624", "hilton": "LONCOCI"}[args.provider]
+    provider_code = (
+        args.code or {"accor": "0338", "gha": "10624", "hilton": "LONCOCI", "ihg": "LONLS"}[args.provider]
+    )
+    if args.provider == "ihg" and not args.official_url:
+        from app.providers.ihg_browser import SAMPLE_URL
+
+        args.official_url = SAMPLE_URL
     if args.proxy:
         os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
     settings = get_settings()
-    if args.diagnostics:
+    if args.diagnostics or args.headed or args.headless:
         original_factory = FACTORIES[args.provider]
 
         def traced_factory():
             provider = original_factory()
+            if args.headed:
+                provider.headless = False
+            elif args.headless:
+                provider.headless = True
             original_search = provider.search_rates
 
             async def traced_search(request):
@@ -60,10 +75,27 @@ async def main():
                     if exc.__cause__:
                         print("cause=", redact(str(exc.__cause__)), flush=True)
                     page = provider._page
-                    if page and not page.is_closed():
+                    if args.diagnostics and page and not page.is_closed():
                         print("failure_url=", redact(page.url), flush=True)
                         excerpt = redact((await page.locator("body").inner_text())[:5000])
                         print("failure_body=", ascii(excerpt), flush=True)
+                        if args.provider == "ihg":
+                            controls = await page.locator(
+                                '#room-and-guest, [data-testid="adults-count-input"], '
+                                '[data-testid="roomAndGuestModal"], input.calendar-input'
+                            ).evaluate_all("""es => es.map(e => ({
+                                tag:e.tagName, id:e.id, testid:e.getAttribute('data-testid'),
+                                value:e.tagName==='INPUT'?e.value:undefined,
+                                text:e.innerText?.slice(0,500), type:e.getAttribute('type'),
+                                visible:!!(e.getClientRects().length),
+                                rect:{x:e.getBoundingClientRect().x,y:e.getBoundingClientRect().y,
+                                    width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height}
+                            }))""")
+                            print(
+                                "public_booking_controls=",
+                                json.dumps(controls, ensure_ascii=True),
+                                flush=True,
+                            )
                     raise
 
             provider.search_rates = traced_search
@@ -96,6 +128,8 @@ async def main():
                 hotel = await session.scalar(select(Hotel))
                 discovery = await session.get(CrawlJob, discovery_id)
                 print("discovery=", discovery.status, discovery.error_type, flush=True)
+                if discovery.error_message:
+                    print("discovery_error=", discovery.error_message, flush=True)
                 if hotel is None:
                     raise SystemExit(2)
                 day = args.date

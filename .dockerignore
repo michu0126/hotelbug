@@ -20,3 +20,5 @@ work
 frontend/node_modules
 frontend/dist
 logs
+.browser-sessions
+**/.browser-sessions

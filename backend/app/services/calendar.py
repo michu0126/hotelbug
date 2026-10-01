@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import Hotel, PriceHistory, Rate, StayScan
+from app.services.pricing import displayed_price, price_field
 
 
 def as_utc(value: datetime) -> datetime:
@@ -44,7 +45,7 @@ def calendar_rows(
     for rate in current:
         if (
             rate.availability
-            and rate.total_price is not None
+            and displayed_price(rate) is not None
             and rate.adults == 2
             and rate.rooms == 1
             and (hotel.default_currency is None or rate.currency == hotel.default_currency)
@@ -52,13 +53,13 @@ def calendar_rows(
             by_day[rate.check_in].append(rate)
     prior: dict[str, list[PriceHistory]] = defaultdict(list)
     for item in history:
-        if item.availability and item.total_price is not None:
+        if item.availability and displayed_price(item) is not None:
             prior[item.offer_key].append(item)
     scans_by_day = {scan.check_in: scan for scan in scans or [] if (scan.check_out - scan.check_in).days == 1}
     days = []
     for day in month_dates(month):
         choices = by_day.get(day, [])
-        best = min(choices, key=lambda r: (r.total_price, r.offer_key)) if choices else None
+        best = min(choices, key=lambda r: (displayed_price(r), r.offer_key)) if choices else None
         scan = scans_by_day.get(day)
         if scan and scan.status == "UNAVAILABLE":
             observed = as_utc(scan.observed_at)
@@ -70,23 +71,29 @@ def calendar_rows(
             days.append({"date": day.isoformat(), "status": "NO_DATA"})
             continue
         # Historical low and previous sample refer to exactly the selected offer.
-        observations = [item for item in prior.get(best.offer_key, []) if item.currency == best.currency]
+        observations = [
+            item
+            for item in prior.get(best.offer_key, [])
+            if item.currency == best.currency and price_field(item) == price_field(best)
+        ]
         historical_low = (historical_lows or {}).get(best.offer_key)
         if historical_low is None:
-            historical_low = min((item.total_price for item in observations), default=None)
+            historical_low = min((displayed_price(item) for item in observations), default=None)
         older = [item for item in observations if as_utc(item.captured_at) < as_utc(best.captured_at)]
         previous = max(older, key=lambda item: as_utc(item.captured_at)) if older else None
         drop = None
-        if previous and previous.total_price > 0:
-            drop = ((previous.total_price - best.total_price) / previous.total_price * 100).quantize(
-                Decimal("0.01")
-            )
+        if previous and displayed_price(previous) > 0:
+            drop = (
+                (displayed_price(previous) - displayed_price(best)) / displayed_price(previous) * 100
+            ).quantize(Decimal("0.01"))
         days.append(
             {
                 "date": day.isoformat(),
                 "status": "AVAILABLE",
                 "currency": best.currency,
-                "current_low": str(best.total_price),
+                "current_low": str(displayed_price(best)),
+                "price_field": price_field(best),
+                "price_basis": best.price_basis,
                 "historical_low": str(historical_low) if historical_low is not None else None,
                 "drop_from_previous_percent": str(drop) if drop is not None else None,
                 "offer_key": best.offer_key,
@@ -99,7 +106,7 @@ def calendar_rows(
     return {
         "hotel_id": hotel.id,
         "month": month,
-        "price_basis": "one_night_total",
+        "price_basis": "one_night_displayed",
         "currency": hotel.default_currency,
         "days": days,
     }
@@ -132,7 +139,7 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
     current = [item for item in current if (item.check_out - item.check_in).days == 1]
     # The calendar needs prior samples only for each day's current cheapest offer.
     keys = {
-        min(rates, key=lambda r: (r.total_price, r.offer_key)).offer_key
+        min(rates, key=lambda r: (displayed_price(r), r.offer_key)).offer_key
         for day in month_dates(month)
         if (
             rates := [
@@ -140,7 +147,7 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
                 for r in current
                 if r.check_in == day
                 and r.availability
-                and r.total_price is not None
+                and displayed_price(r) is not None
                 and (hotel.default_currency is None or r.currency == hotel.default_currency)
             ]
         )
@@ -150,12 +157,15 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
     lows = dict(
         (
             await session.execute(
-                select(PriceHistory.offer_key, func.min(PriceHistory.total_price))
+                select(
+                    PriceHistory.offer_key,
+                    func.min(func.coalesce(PriceHistory.total_price, PriceHistory.cash_price)),
+                )
                 .where(
                     PriceHistory.hotel_id == hotel.id,
                     PriceHistory.offer_key.in_(keys),
                     PriceHistory.availability.is_(True),
-                    PriceHistory.total_price.is_not(None),
+                    func.coalesce(PriceHistory.total_price, PriceHistory.cash_price).is_not(None),
                 )
                 .group_by(PriceHistory.offer_key)
             )

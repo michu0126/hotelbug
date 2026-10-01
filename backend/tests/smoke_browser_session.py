@@ -92,6 +92,12 @@ async def main():
             await provider.close()
             await close_browser_sessions()
             print("late_consent_overlay_dismissed=PASS", flush=True)
+            page = await new_provider_page("headed-runtime", browser_channel=args.channel, headless=False)
+            await page.set_content("<h1>Ordinary Worker browser ready</h1>")
+            assert await page.locator("h1").inner_text() == "Ordinary Worker browser ready"
+            await page.close()
+            await close_browser_sessions()
+            print("headed_worker_browser_ready=PASS", flush=True)
     finally:
         await close_browser_sessions()
         server.shutdown()

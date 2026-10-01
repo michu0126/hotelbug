@@ -112,7 +112,12 @@ class RateData(RateRequest):
             "price_basis",
         )
         data = self.model_dump(mode="json")
-        return hashlib.sha256(json.dumps({k: data[k] for k in fields}, sort_keys=True).encode()).hexdigest()
+        identity = {k: data[k] for k in fields}
+        # Preserve existing all-fees offer keys, but never compare a displayed-only
+        # cash price against a total that includes additional fees.
+        if self.total_price is None and self.cash_price is not None:
+            identity["amount_basis"] = "cash_price"
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
 class HealthResult(BaseModel):

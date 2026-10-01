@@ -54,6 +54,44 @@ def test_calendar_month_validation():
             raise AssertionError(f"accepted {bad}")
 
 
+async def test_displayed_only_calendar_and_history_are_separate_from_total(sessions):
+    async with sessions() as db, db.begin():
+        original = fixture_rate()
+        hotel = await upsert_hotel(
+            db,
+            HotelData(
+                provider=original.provider,
+                provider_hotel_id=original.provider_hotel_id,
+                hotel_name="Fixture hotel",
+                official_url=original.source_url,
+                default_currency="USD",
+            ),
+        )
+        await persist_rates(db, hotel, [original], "all-fees-total")
+        displayed = original.model_copy(
+            update={
+                "cash_price": Decimal("90"),
+                "total_price": None,
+                "tax": None,
+                "captured_at": original.captured_at + timedelta(seconds=1),
+            }
+        )
+        await persist_rates(db, hotel, [displayed], "displayed")
+        cheaper = displayed.model_copy(
+            update={
+                "cash_price": Decimal("45"),
+                "captured_at": original.captured_at + timedelta(seconds=2),
+            }
+        )
+        await persist_rates(db, hotel, [cheaper], "displayed-cheaper")
+        day = (await get_calendar(db, hotel, "2027-01"))["days"][6]
+        assert day["status"] == "AVAILABLE" and day["price_field"] == "cash_price"
+        assert Decimal(day["current_low"]) == Decimal("45")
+        assert Decimal(day["historical_low"]) == Decimal("45")
+        assert day["drop_from_previous_percent"] == "50.00"
+        assert day["offer_key"] != original.offer_key()
+
+
 async def test_empty_successful_scan_hides_stale_price_and_keeps_history(sessions):
     async with sessions() as db, db.begin():
         hotel = await upsert_hotel(

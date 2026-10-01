@@ -20,7 +20,7 @@ from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
 from app.services.alerts import confirm_drop, detect_drops
 from app.services.jobs import enqueue
-from app.services.notifications import deliver_one
+from app.services.notifications import deliver_one, telegram_text
 from app.services.rates import persist_rates, upsert_hotel
 
 
@@ -114,6 +114,38 @@ async def test_baseline_needs_distinct_days_and_matching_currency(sessions):
         assert await detect_drops(s, hotel, [quote("30")], Settings()) == 0
         await persist_rates(s, hotel, [quote("200", utcnow() - timedelta(days=3), currency="EUR")], "eur")
         assert await detect_drops(s, hotel, [quote("30")], Settings()) == 0
+
+
+async def test_displayed_cash_drop_is_confirmed_and_labels_unverified_total(sessions):
+    def displayed(price, captured=None):
+        return quote(price, captured, cash_price=Decimal(price), total_price=None, price_basis="nightly")
+
+    async with sessions() as s, s.begin():
+        hotel = await seed_history(s)
+        for index, amount in enumerate(("200", "210", "190"), 1):
+            await persist_rates(
+                s,
+                hotel,
+                [quote(amount, utcnow() - timedelta(days=index), price_basis="nightly")],
+                f"total-nightly{index}",
+            )
+        # The all-fees observations alone cannot provide a displayed-only baseline.
+        assert await detect_drops(s, hotel, [displayed("70")], Settings()) == 0
+        for index, amount in enumerate(("200", "210", "190"), 1):
+            await persist_rates(
+                s, hotel, [displayed(amount, utcnow() - timedelta(days=index))], f"cash{index}"
+            )
+        assert await detect_drops(s, hotel, [displayed("70")], Settings()) == 1
+        alert = await s.scalar(select(PriceAlert))
+        assert alert.payload["price_field"] == "cash_price"
+        assert not await confirm_drop(
+            s, alert.id, alert.verification_job_id, [quote("70", price_basis="nightly")]
+        )
+        assert await confirm_drop(s, alert.id, alert.verification_job_id, [displayed("65")])
+        text = telegram_text(alert.payload)
+        assert "65" in text and "每晚官网展示价，全部税费未确认" in text
+        assert "每晚含税费" not in text
+        assert await s.scalar(select(func.count()).select_from(NotificationLog)) == 1
 
 
 @pytest.mark.parametrize(

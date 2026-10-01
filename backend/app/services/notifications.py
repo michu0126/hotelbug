@@ -20,7 +20,10 @@ GROUP_NAMES = {
 
 
 def telegram_text(payload: dict) -> str:
-    basis = "每晚含税费" if payload.get("price_basis") == "nightly" else "整段住宿含税费"
+    duration = "每晚" if payload.get("price_basis") == "nightly" else "整段住宿"
+    basis = duration + (
+        "官网展示价，全部税费未确认" if payload.get("price_field") == "cash_price" else "含税费"
+    )
     return (
         "酒店降价提醒（已复查）\n"
         f"酒店：{payload['hotel_name']}\n"
