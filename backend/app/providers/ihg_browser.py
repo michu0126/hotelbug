@@ -8,6 +8,7 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.accor_browser import AccorBrowserProvider
+from app.providers.ihg_catalog import ROOT, directory_url, parse_catalog
 from app.providers.ihg_page import (
     WINDOW_CLOSED,
     booking_window_closed,
@@ -17,7 +18,7 @@ from app.providers.ihg_page import (
     verify_booking,
     verify_displayed_stay,
 )
-from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
+from app.schemas.domain import CatalogPageData, HealthResult, HotelData, RateData, RateRequest
 
 SAMPLE_URL = "https://www.ihg.com/hotelindigo/hotels/us/en/london/lonls/hoteldetail"
 
@@ -75,6 +76,39 @@ class IHGBrowserProvider(AccorBrowserProvider):
         if not url or property_identity(url)[4].upper() != hotel_id.upper():
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG official hotel URL required for this code")
         return (await self.search_hotels({"official_url": url}))[0]
+
+    async def discover_catalog(self, query: dict) -> CatalogPageData:
+        url = query.get("official_url")
+        if not isinstance(url, str):
+            raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG catalog URL missing")
+        url = directory_url(url)
+        try:
+            page = await self._get_page()
+            response = await page.goto(url, wait_until="commit", timeout=45000)
+            await self._check_access(page, response.status if response else None)
+            if url == ROOT:
+                await (
+                    page.locator(".cmp-accordion__title")
+                    .filter(has_text="US & Canada")
+                    .wait_for(state="visible", timeout=30000)
+                )
+            else:
+                # Small city pages omit the total-count bar entirely. Their
+                # public hotel headings are the usable readiness signal.
+                await page.wait_for_function(
+                    """() => document.querySelector('h4 a[href]') ||
+                        document.querySelector('#cmp-card__title-bar-count')?.textContent.trim() === '0'""",
+                    timeout=30000,
+                )
+            await self._check_access(page)
+            if directory_url(page.url) != url:
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG directory redirected unexpectedly")
+            return parse_catalog(await page.content(), page.url)
+        except BrowserError as exc:
+            raise ProviderError(
+                ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
+                "IHG official directory page failed",
+            ) from exc
 
     async def _choose_day(self, page, day: date):
         cell = page.locator(f'[data-year="{day.year}"][data-month="{day.month}"][data-day="{day.day}"]')
@@ -144,7 +178,9 @@ class IHGBrowserProvider(AccorBrowserProvider):
                 timeout=15000,
             )
             stage = "search submission"
-            await page.get_by_role("button", name="View prices", exact=True).click()
+            # Brand headers can expose a same-name button that only scrolls to
+            # this form. Submit the actual date/occupancy search component.
+            await page.get_by_test_id("consolidate-search-submit-button").click()
             await page.wait_for_url("**/find-hotels/select-roomrate?**", wait_until="commit", timeout=45000)
             stage = "room results"
             await page.wait_for_function(

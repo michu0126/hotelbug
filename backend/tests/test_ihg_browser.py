@@ -25,6 +25,7 @@ class RenderedPage:
         self.url = URL
         self.expanded = []
         self.public = []
+        self.clicked_controls = []
         self.wait_for_function = AsyncMock()
         self.wait_for_url = AsyncMock()
 
@@ -57,7 +58,7 @@ class RenderedPage:
 
     def get_by_test_id(self, _test_id):
         locator = MagicMock()
-        locator.click = AsyncMock()
+        locator.click = AsyncMock(side_effect=lambda **kwargs: self.clicked_controls.append(_test_id))
         locator.fill = AsyncMock()
         locator.press = AsyncMock()
         locator.is_visible = AsyncMock(return_value=False)
@@ -90,6 +91,7 @@ async def test_expands_every_room_and_waits_for_public_cards(monkeypatch):
     rates = await provider.search_rates(SEARCH)
     assert page.expanded == ["OAAN", "OQNN"]
     assert page.public == [("OAAN", False), ("OQNN", False)]
+    assert "consolidate-search-submit-button" in page.clicked_controls
     assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list[2:]] == [
         "ROOM_CODEOAAN",
         "ROOM_CODEOQNN",

@@ -1,9 +1,10 @@
 <script setup>
 import {computed,onMounted,onUnmounted,ref,watch} from 'vue';
-const status=ref(null),providers=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
+const status=ref(null),providers=ref([]),catalogs=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
 const error=ref(''),actionMessage=ref(''),loading=ref(false),actionBusy=ref(false);
 const adminToken=ref(''),propertyCode=ref('0338'),selectedProvider=ref('accor'),hotelId=ref(''),daysAhead=ref(365);
 const officialUrl=ref('');
+const hotelSearch=ref('');
 const needsOfficialUrl=computed(()=>['ihg','hilton'].includes(selectedProvider.value));
 const telegramBotToken=ref(''),telegramChatId=ref(''),telegramConfigured=ref(false),telegramEnabled=ref(true),telegramDirty=ref(false),telegramMessage=ref('');
 const today=new Date(),month=ref(`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`);
@@ -17,8 +18,8 @@ async function refresh(){
   if(loading.value)return;
   loading.value=true;
   try{
-    const results=await Promise.all(['/dashboard','/providers','/jobs','/hotels?limit=100','/watchlists','/alerts'].map(p=>api(p)));
-    [status.value,providers.value,jobs.value,hotels.value,watches.value,alerts.value]=results;
+    const results=await Promise.all(['/dashboard','/providers','/jobs',`/hotels?limit=100&q=${encodeURIComponent(hotelSearch.value.trim())}`,'/watchlists','/alerts','/catalogs'].map(p=>api(p)));
+    [status.value,providers.value,jobs.value,hotels.value,watches.value,alerts.value,catalogs.value]=results;
     if(!hotelId.value&&hotels.value.length)hotelId.value=hotels.value[0].id;
     error.value='';
   }catch(e){error.value=e.message;}finally{loading.value=false;}
@@ -27,6 +28,11 @@ async function loadCalendar(){
   if(!hotelId.value){calendar.value=null;return;}
   try{calendar.value=await api(`/hotels/${encodeURIComponent(hotelId.value)}/calendar?month=${month.value}`);error.value='';}
   catch(e){calendar.value=null;error.value=e.message;}
+}
+async function searchHotels(){
+  if(loading.value)return;
+  hotelId.value='';
+  await refresh();
 }
 async function discover(){
   actionBusy.value=true;actionMessage.value='';
@@ -114,6 +120,7 @@ onUnmounted(()=>clearInterval(timer));
     <section class="cards"><article><small>酒店库</small><strong>{{status?.hotels??'—'}}</strong></article><article><small>今日采集报价</small><strong>{{status?.rates_today??'—'}}</strong></article><article><small>待处理任务</small><strong>{{status?.queued_jobs??'—'}}</strong></article><article><small>已确认异常</small><strong>{{status?.confirmed_alerts??'—'}}</strong></article></section>
     <section class="panel"><h2>酒店与价格日历</h2><p class="muted">启用对应集团并设置管理令牌后可提交任务。雅高与 GHA 已通过官网单酒店采集入库实测；其他集团的状态见下方。</p>
       <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存" @blur="loadTelegramSettings"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="gha">GHA</option><option value="marriott">万豪（实验）</option><option value="ihg">IHG（实验）</option><option value="hilton">希尔顿（实验）</option></select></label><label v-if="needsOfficialUrl">官网英文酒店详情链接<input v-model="officialUrl" type="url" placeholder="https://www.ihg.com/…/hoteldetail"></label><label v-else>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="雅高 0338 / GHA 10624"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
+      <div class="fields"><label>搜索已收录的全球酒店<input v-model="hotelSearch" placeholder="酒店名称、国家、城市或品牌" @keyup.enter="searchHotels"></label><button :disabled="loading" @click="searchHotels">搜索酒店</button><small>最多显示 100 个匹配结果，输入关键词查找其他酒店</small></div>
       <div class="fields"><label>酒店<select v-model="hotelId"><option value="">请选择</option><option v-for="h in hotels" :key="h.id" :value="h.id">{{h.hotel_name}} · {{h.city||h.provider_hotel_id}}</option></select></label><label>月份<input v-model="month" type="month"></label><button class="primary" :disabled="actionBusy||!hotelId" @click="crawlMonth">采集本月报价</button></div>
       <div class="fields"><label>自动监控未来天数<select v-model="daysAhead"><option :value="30">30 天</option><option :value="90">90 天</option><option :value="365">365 天</option></select></label><button class="primary" :disabled="actionBusy||!hotelId" @click="watchHotel">保存自动监控</button><small>已启用酒店监控 {{watches.filter(w=>w.enabled).length}} 项</small></div>
       <p v-if="actionMessage" role="status" class="notice">{{actionMessage}}</p>
@@ -133,6 +140,7 @@ onUnmounted(()=>clearInterval(timer));
     <section class="panel"><h2>Telegram 通知设置</h2><p class="muted">填写上面的管理令牌后保存；机器人 Token 留空表示保留已保存的值。保存后可手动发送一条测试消息。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token" @input="telegramDirty=true"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID" @input="telegramDirty=true"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveTelegram">保存 Telegram 设置</button><button :disabled="actionBusy||!telegramConfigured||telegramDirty" @click="testTelegram">发送测试消息</button><small>{{telegramConfigured?'已配置':'尚未在此页面保存'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
     <section class="panel"><h2>后台服务</h2><p>Worker 心跳：{{when(status?.worker_heartbeat)}}</p><p>Scheduler 心跳：{{when(status?.scheduler_heartbeat)}}</p><small>心跳只表示进程在线。请以 Provider 状态和实际报价为准。</small></section>
     <section class="panel"><h2>Provider 状态</h2><div class="providers"><article v-for="p in providers" :key="p.provider"><h3>{{names[p.provider]}}</h3><span class="badge">{{p.implemented?(p.enabled?p.status:'默认关闭 · '+p.status):'待研究 / 尚未实现'}}</span><p>{{p.last_error||p.verification}}</p><small>今日任务 {{p.requests_today||0}} · 成功 {{p.success_count||0}}</small></article></div></section>
+    <section class="panel"><h2>全球官网目录接入进度</h2><p class="muted">IHG 启用后自动沿官网全球地区及城市目录发现酒店。目录收录数量不等于已取得价格；报价酒店数量单独统计。</p><div class="table"><table><thead><tr><th>集团</th><th>已收录酒店</th><th>取得报价的酒店</th><th>已解析 / 已发现目录</th><th>目录完整性未确认</th><th>目录状态 / 最近问题</th></tr></thead><tbody><tr v-for="c in catalogs" :key="c.provider"><td>{{names[c.provider]}}</td><td>{{c.hotels}}</td><td>{{c.hotels_with_quotes}}</td><td>{{c.source==='OFFICIAL_BROWSER_DIRECTORY'?`${c.parsed_directory_pages} / ${c.directory_pages}`:'—'}}</td><td>{{c.partial_directory_pages}}</td><td>{{c.last_error||(c.source==='NOT_IMPLEMENTED'?'尚未实现':c.enabled?'自动发现中':'默认关闭')}}</td></tr></tbody></table></div></section>
     <section class="panel"><h2>最近任务</h2><p v-if="!jobs.length" class="empty">暂无任务。</p><div class="table" v-else><table><thead><tr><th>集团</th><th>类型</th><th>状态</th><th>计划时间</th><th>错误</th></tr></thead><tbody><tr v-for="j in jobs" :key="j.id"><td>{{names[j.provider]}}</td><td>{{j.kind}}</td><td>{{j.status}}</td><td>{{when(j.scheduled_at)}}</td><td>{{j.error_type||'—'}}</td></tr></tbody></table></div></section>
     <footer>价格来自实际成功采集；无数据即显示空白 · Telegram 机器人可在本页面设置</footer>
   </main>

@@ -16,6 +16,7 @@ from app.models.tables import CrawlJob, Hotel, ProviderStatus, utcnow
 from app.providers.registry import create_provider
 from app.schemas.domain import JobKind, RateRequest
 from app.services.alerts import confirm_drop, detect_drops
+from app.services.ihg_catalogs import persist_catalog, record_catalog_failure
 from app.services.jobs import backoff, within_monitoring_window
 from app.services.queue import Queue
 from app.services.rates import finalize_stay_scan, persist_rates, upsert_hotel
@@ -32,6 +33,11 @@ async def execute(job: CrawlJob, hotel: Hotel | None):
             return await provider.health_check()
         if job.kind == JobKind.DISCOVER_HOTELS:
             return await provider.search_hotels(job.payload)
+        if job.kind == JobKind.DISCOVER_CATALOG:
+            discover = getattr(provider, "discover_catalog", None)
+            if not callable(discover):
+                raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Provider directory browser not implemented")
+            return await discover(job.payload)
         if not hotel:
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hotel not found")
         request = RateRequest(
@@ -99,6 +105,13 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
     result = None
     try:
         result = await asyncio.wait_for(execute(job, hotel), settings.job_timeout_seconds)
+        if job.kind == JobKind.DISCOVER_CATALOG:
+            if job.provider != "ihg" or result.provider != job.provider:
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Catalog provider mismatch")
+            from app.providers.ihg_catalog import directory_url
+
+            if directory_url(str(result.source_url)) != directory_url(job.payload.get("official_url", "")):
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Catalog URL does not match job")
         if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY) and any(
             r.check_in != job.check_in or r.check_out != job.check_out for r in result
         ):
@@ -183,6 +196,8 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                 state.success_count += 1
                 state.last_success = utcnow()
             elif error:
+                if job.kind == JobKind.DISCOVER_CATALOG and job.provider == "ihg":
+                    await record_catalog_failure(session, job, error)
                 current.retry_count += 1
                 current.error_type, current.error_message = error.code, redact(str(error))
                 transient = error.code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR, ErrorCode.RATE_LIMITED)
@@ -207,7 +222,9 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                 elif error.code in (ErrorCode.NOT_IMPLEMENTED, ErrorCode.BROWSER_UNAVAILABLE):
                     state.status = "BROKEN"
             else:
-                if job.kind == JobKind.DISCOVER_HOTELS:
+                if job.kind == JobKind.DISCOVER_CATALOG:
+                    await persist_catalog(session, job, result, settings)
+                elif job.kind == JobKind.DISCOVER_HOTELS:
                     for data in result:
                         if data.provider != job.provider:
                             raise ValueError("discovery provider mismatch")

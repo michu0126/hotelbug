@@ -212,6 +212,40 @@ async def providers(db: Db):
     return result
 
 
+@app.get("/api/catalogs")
+async def catalogs(db: Db):
+    result = []
+    for provider in ProviderName:
+        row = await db.get(AppSetting, "catalog:" + provider.value)
+        data = row.value if row else {}
+        pages = list(data.get("pages", {}).values())
+        result.append(
+            {
+                "provider": provider.value,
+                "enabled": settings.global_monitoring_enabled and settings.provider_policy(provider).enabled,
+                "source": "OFFICIAL_BROWSER_DIRECTORY"
+                if provider == ProviderName.IHG
+                else "OFFICIAL_SITEMAP"
+                if provider.value in {"accor", "gha", "hilton"}
+                else "NOT_IMPLEMENTED",
+                "hotels": await db.scalar(
+                    select(func.count()).select_from(Hotel).where(Hotel.provider == provider.value)
+                ),
+                "hotels_with_quotes": await db.scalar(
+                    select(func.count(func.distinct(PriceHistory.hotel_id))).where(
+                        PriceHistory.provider == provider.value
+                    )
+                ),
+                "directory_pages": len(pages),
+                "parsed_directory_pages": sum(p.get("status") in {"SUCCEEDED", "PARTIAL"} for p in pages),
+                "partial_directory_pages": sum(p.get("status") == "PARTIAL" for p in pages),
+                "failed_directory_pages": sum(p.get("status") == "FAILED" for p in pages),
+                "last_error": data.get("last_error"),
+            }
+        )
+    return result
+
+
 @app.get("/api/hotels")
 async def hotels(
     db: Db,

@@ -14,6 +14,7 @@ from app.models.tables import CrawlJob, ProviderStatus, utcnow
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
 from app.services.catalogs import discover_accor, discover_gha, discover_hilton
+from app.services.ihg_catalogs import discover_ihg
 from app.services.jobs import enqueue
 from app.services.notifications import deliver_one
 from app.services.queue import Queue
@@ -117,7 +118,7 @@ async def main() -> None:
     try:
         while True:
             try:
-                catalogs = (discover_accor, discover_gha, discover_hilton)
+                catalogs = (discover_accor, discover_gha, discover_hilton, discover_ihg)
                 discovery = catalogs[catalog_turn % len(catalogs)]
                 catalog_turn += 1
                 await discovery(Session, queue, settings, catalog_client)

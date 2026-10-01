@@ -18,6 +18,7 @@ class ProviderName(StrEnum):
 
 
 class JobKind(StrEnum):
+    DISCOVER_CATALOG = "DISCOVER_CATALOG"
     DISCOVER_HOTELS = "DISCOVER_HOTELS"
     FETCH_RATE = "FETCH_RATE"
     FETCH_CALENDAR = "FETCH_CALENDAR"
@@ -40,6 +41,26 @@ class HotelData(BaseModel):
     default_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     official_url: HttpUrl
     active: bool = True
+
+
+class CatalogPageData(BaseModel):
+    """One rendered official directory page, not a collection of price quotes."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: ProviderName
+    source_url: HttpUrl
+    directory_urls: list[HttpUrl] = Field(default_factory=list)
+    hotels: list[HotelData] = Field(default_factory=list)
+    reported_total: int | None = Field(default=None, ge=0)
+    complete: bool
+
+    @model_validator(mode="after")
+    def identities(self) -> Self:
+        if any(h.provider != self.provider for h in self.hotels):
+            raise ValueError("catalog hotel provider mismatch")
+        if len({h.provider_hotel_id for h in self.hotels}) != len(self.hotels):
+            raise ValueError("duplicate catalog hotel identity")
+        return self
 
 
 class RateRequest(BaseModel):

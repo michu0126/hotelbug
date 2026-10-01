@@ -79,6 +79,48 @@ async def test_api_live_providers_and_write_guard(sessions):
         app.dependency_overrides.clear()
 
 
+async def test_catalog_api_distinguishes_discovery_from_actual_quote_coverage(sessions):
+    from app.models.tables import AppSetting
+
+    async with sessions() as db, db.begin():
+        await upsert_hotel(
+            db,
+            HotelData(
+                provider="ihg",
+                provider_hotel_id="HSVPP",
+                hotel_name="Observed Hotel",
+                official_url="https://www.ihg.com/holidayinnexpress/hotels/us/en/huntsville/hsvpp/hoteldetail",
+            ),
+        )
+        db.add(
+            AppSetting(
+                key="catalog:ihg",
+                value={
+                    "pages": {"root": {"status": "SUCCEEDED"}, "leaf": {"status": "PARTIAL"}, "todo": {}},
+                    "last_error": "DIRECTORY_PARTIAL",
+                },
+            )
+        )
+
+    async def dependency():
+        async with sessions() as db:
+            yield db
+
+    app.dependency_overrides[get_session] = dependency
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/catalogs")
+            assert response.status_code == 200
+            ihg = next(x for x in response.json() if x["provider"] == "ihg")
+            assert ihg["hotels"] == 1 and ihg["hotels_with_quotes"] == 0
+            assert ihg["parsed_directory_pages"] == 2 and ihg["directory_pages"] == 3
+            assert ihg["partial_directory_pages"] == 1 and ihg["last_error"] == "DIRECTORY_PARTIAL"
+    finally:
+        app.dependency_overrides.clear()
+
+
 async def test_watchlist_create_and_update_via_api(sessions, monkeypatch):
     monkeypatch.setattr(settings, "admin_token", SecretStr("test-only"))
     async with sessions() as db, db.begin():
