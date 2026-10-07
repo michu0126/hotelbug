@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import Hotel, PriceHistory, Rate, StayScan
+from app.services.offer_policy import classify_offer
 from app.services.pricing import displayed_price, price_field
 
 
@@ -100,6 +101,7 @@ def calendar_rows(
                 "room_type": best.room_type,
                 "rate_name": best.rate_name,
                 "member_rate": best.member_rate,
+                "offer_classification": classify_offer(best).as_dict(),
                 "captured_at": best.captured_at.isoformat(),
             }
         )

@@ -1,14 +1,17 @@
 """Accor public website form and rendered public, tax-inclusive room prices."""
 
 import hashlib
+import json
 import re
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from time import monotonic
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from playwright.async_api import Error as BrowserError
 from playwright.async_api import TimeoutError as BrowserTimeout
+from playwright.async_api import expect
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.base import HotelProvider
@@ -32,6 +35,11 @@ MONTHS = (
 )
 
 
+def is_explicit_test_hotel(name: str) -> bool:
+    """Exclude the actual public helpdesk test entry, not arbitrary 'test' words."""
+    return " ".join(name.casefold().split()) == "test hotel for the helpdesk resynch"
+
+
 def hotel_code(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise ProviderError(
@@ -42,6 +50,98 @@ def hotel_code(value: str) -> str:
 
 def name_key(value: str) -> str:
     return hashlib.sha256(" ".join(value.lower().split()).encode()).hexdigest()[:24]
+
+
+def public_detail_location(html: str, hotel_name: str, hotel_id: str, page_url: str) -> dict:
+    """Read the observed public Hotel schema only after hotel/name agreement."""
+    parsed = urlparse(page_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "all.accor.com"
+        or parsed.path != f"/hotel/{hotel_code(hotel_id)}/index.en.shtml"
+    ):
+        return {}
+    hotels = []
+    soup = BeautifulSoup(html, "html.parser")
+
+    def visible_address_agrees(address):
+        if not isinstance(address, dict):
+            return False
+        required = [address.get("streetAddress"), address.get("addressLocality")]
+        if not all(isinstance(value, str) and value.strip() for value in required):
+            return False
+        sections = [
+            title.parent for title in soup.select("h2") if title.get_text(" ", strip=True) == "Hotel location"
+        ]
+        if len(sections) != 1:
+            return False
+        titles = sections[0].select("p.infos__title")
+        if len(titles) != 1 or " ".join(titles[0].get_text(" ", strip=True).casefold().split()) != " ".join(
+            hotel_name.casefold().split()
+        ):
+            return False
+        block = titles[0].find_next_sibling("p")
+        if block is None:
+            return False
+        displayed = " ".join(block.get_text(" ", strip=True).casefold().split())
+        # Schema names may be SEO titles. Only the actual owner name/address
+        # block can establish agreement, not nearby stations or a body search.
+        return all(
+            re.search(r"(?<!\w)" + re.escape(" ".join(value.casefold().split())) + r"(?!\w)", displayed)
+            for value in required
+        )
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            types = value.get("@type")
+            if types == "Hotel" or isinstance(types, list) and "Hotel" in types:
+                name = value.get("name")
+                if isinstance(name, str):
+                    # This exact suffix is in the actual ALL public schema;
+                    # don't infer brands or match only a substring of the name.
+                    name = name.removesuffix(" - ALL")
+                    if " ".join(name.casefold().split()) == " ".join(
+                        hotel_name.casefold().split()
+                    ) or visible_address_agrees(value.get("address")):
+                        hotels.append(value)
+            if "@graph" in value:
+                visit(value["@graph"])
+
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            visit(json.loads(script.get_text()))
+        except (ValueError, TypeError):
+            continue
+    if len(hotels) != 1:
+        return {}
+    result = {}
+    address = hotels[0].get("address")
+    if isinstance(address, dict):
+        for source, target in (
+            ("streetAddress", "address"),
+            ("addressLocality", "city"),
+            ("addressRegion", "region"),
+            ("addressCountry", "country"),
+        ):
+            value = address.get(source)
+            if isinstance(value, str) and value.strip():
+                result[target] = " ".join(value.split())
+    geo = hotels[0].get("geo")
+    if isinstance(geo, dict):
+        for key, limit in (("latitude", 90), ("longitude", 180)):
+            value = geo.get(key)
+            if type(value) not in (str, int, float):
+                continue
+            try:
+                coordinate = Decimal(str(value))
+                if coordinate.is_finite() and -limit <= coordinate <= limit:
+                    result[key] = coordinate
+            except InvalidOperation:
+                continue
+    return result
 
 
 def parse_public_rates(html: str, request: RateRequest, page_url: str) -> list[RateData]:
@@ -103,7 +203,8 @@ def parse_public_rates(html: str, request: RateRequest, page_url: str) -> list[R
             parent = parent.parent
         if heading is None:
             raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room identity missing")
-        room_name, rate_name = heading.get_text(" ", strip=True), title.get_text(" ", strip=True)
+        room_name = " ".join(heading.get_text(" ", strip=True).split())
+        rate_name = " ".join(title.get_text(" ", strip=True).split())
         policy = label.get_text(" ", strip=True)
         rate = RateData(
             **request.model_dump(exclude={"provider_hotel_id"}),
@@ -200,17 +301,107 @@ class AccorBrowserProvider(HotelProvider):
             page = await self._open(hotel_id)
             name = (await page.locator("h1").first.inner_text()).strip()
             name = re.sub(r"\s+\d(?:\.\d)?\s+stars?$", "", name, flags=re.IGNORECASE)
+            location = public_detail_location(await page.content(), name, hotel_id, page.url)
             return HotelData(
                 provider="accor",
                 provider_hotel_id=hotel_code(hotel_id),
                 hotel_name=name,
                 official_url=ROOT + f"/hotel/{hotel_code(hotel_id)}/index.en.shtml",
+                **location,
+                # Explicit False prevents global monitoring of the official
+                # helpdesk placeholder. Omit True so a normal catalog refresh
+                # cannot re-enable a hotel the user deliberately disabled.
+                **({"active": False} if is_explicit_test_hotel(name) else {}),
             )
         except BrowserError as exc:
             raise ProviderError(
                 ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
                 "Accor hotel page failed",
             ) from exc
+
+    async def _set_occupancy(self, page, request: RateRequest) -> None:
+        """Normalize the actual form state using the site's own guest buttons."""
+        summary = page.locator("#compo-summary")
+        if await summary.get_attribute("aria-expanded") != "true":
+            await summary.click()
+        await page.locator("#booking-compo").wait_for(state="visible")
+        room_fields = page.locator("#booking-compo .booking__room")
+        room_count = await room_fields.count()
+        if not 1 <= room_count <= 9:
+            raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room controls changed")
+        # Remove the last extra room so the original first room stays stable.
+        for remaining in range(room_count - 1, 0, -1):
+            await room_fields.last.get_by_role("button", name="Remove the room", exact=True).click()
+            await expect(room_fields).to_have_count(remaining, timeout=5000)
+        await expect(page.locator("#search-room-number")).to_have_value("1", timeout=5000)
+        room = page.locator("#compo-room-0")
+        for selector, target, minimum, maximum, noun in (
+            ("#search-adult-room-0", request.adults, 1, 9, "an adult"),
+            ("#search-children-room-0", 0, 0, 6, "a child"),
+        ):
+            control = page.locator(selector)
+            # input_value reads the current property; get_attribute('value')
+            # still returns the original 1/0 after the user changes guests.
+            raw = await control.input_value()
+            if not raw.isdigit() or not minimum <= int(raw) <= maximum:
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor guest controls changed")
+            current = int(raw)
+            direction = 1 if current < target else -1
+            action = "Add" if direction == 1 else "Remove"
+            for expected in range(current + direction, target + direction, direction):
+                await room.get_by_role("button", name=f"{action} {noun}", exact=True).click()
+                await expect(control).to_have_value(str(expected), timeout=5000)
+            await expect(control).to_have_value(str(target), timeout=5000)
+        await summary.click()
+        await expect(summary).to_have_attribute("aria-expanded", "false", timeout=5000)
+
+    async def _collect_public_rates(self, page, request: RateRequest) -> list[RateData]:
+        """Read named plans for every actual room card, not collapsed 'from' prices."""
+        cards = page.locator(".hotel-accommodations-offers__item")
+        headings = page.locator(".hotel-accommodations-offers__item-title")
+        room_names = [" ".join(name.split()) for name in await headings.all_text_contents()]
+        if not room_names or any(not name for name in room_names) or len(set(room_names)) != len(room_names):
+            raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room identities missing or ambiguous")
+        if await cards.count() != len(room_names):
+            raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room cards do not match headings")
+        deadline = monotonic() + 45
+
+        def remaining_ms():
+            remaining = int((deadline - monotonic()) * 1000)
+            if remaining <= 0:
+                raise BrowserTimeout("Accor all-room public offers did not finish within 45 seconds")
+            return remaining
+
+        rates = {}
+        for index, room_name in enumerate(room_names):
+            card = cards.nth(index)
+            heading = card.locator(".hotel-accommodations-offers__item-title")
+            if " ".join((await heading.inner_text()).split()) != room_name:
+                raise ProviderError(
+                    ErrorCode.PROVIDER_CHANGED, "Accor room order changed while reading offers"
+                )
+            public = card.locator(
+                "label.hotel-accommodation-offers-content__label .offer-price--alternative"
+            ).first
+            if not await public.is_visible():
+                choose = card.get_by_role("button", name="Choose this room", exact=True)
+                if await choose.count() != 1:
+                    raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room offer control missing")
+                await choose.click(timeout=remaining_ms())
+            await public.wait_for(state="visible", timeout=remaining_ms())
+            # Switching rooms collapses the preceding plans. Keep each real
+            # snapshot separately, with no guessing from summary/member prices.
+            parsed = parse_public_rates(await page.content(), request, page.url)
+            current = [rate for rate in parsed if rate.room_type == room_name]
+            if not current:
+                raise ProviderError(
+                    ErrorCode.INVALID_RESPONSE, "Accor selected room has no verified public plans"
+                )
+            rates.update({rate.offer_key(): rate for rate in current})
+        final_names = [" ".join(name.split()) for name in await headings.all_text_contents()]
+        if final_names != room_names:
+            raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Accor room list changed while reading offers")
+        return list(rates.values())
 
     async def search_rates(self, request: RateRequest) -> list[RateData]:
         if request.rooms != 1 or (request.check_out - request.check_in).days != 1:
@@ -223,13 +414,8 @@ class AccorBrowserProvider(HotelProvider):
             await page.locator('[name="search.dateIn"]').press("Tab")
             await page.locator('[name="search.dateOut"]').fill(request.check_out.strftime("%d/%m/%Y"))
             await page.locator('[name="search.dateOut"]').press("Tab")
-            if request.adults != 1:
-                stage = "guest count"
-                await page.locator("button").filter(has_text="1 room, 1 adult").click()
-                for _ in range(request.adults - 1):
-                    await page.get_by_role("button", name="Add an adult", exact=True).click()
-                await page.locator('[name="search.dateIn"]').click()
-                await page.locator('[name="search.dateIn"]').press("Escape")
+            stage = "guest count"
+            await self._set_occupancy(page, request)
             form = page.locator("form").filter(has=page.locator('[name="search.dateIn"]'))
             stage = "search submission"
             await form.get_by_role("button", name="See rates", exact=True).click()
@@ -241,7 +427,12 @@ class AccorBrowserProvider(HotelProvider):
             await page.locator(
                 "label.hotel-accommodation-offers-content__label .offer-price--alternative"
             ).first.wait_for(state="visible", timeout=45000)
-            return parse_public_rates(await page.content(), request, page.url)
+            stage = "all room offers"
+            return await self._collect_public_rates(page, request)
+        except AssertionError as exc:
+            raise ProviderError(
+                ErrorCode.INVALID_RESPONSE, f"Accor form did not reach requested state at {stage}"
+            ) from exc
         except BrowserError as exc:
             raise ProviderError(
                 ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,

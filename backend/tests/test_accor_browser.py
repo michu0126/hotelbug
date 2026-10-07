@@ -75,7 +75,13 @@ async def test_booking_navigation_waits_for_commit_then_verifiable_offers(monkey
     page.content = AsyncMock(return_value=rendered_page())
     page.url = "https://all.accor.com/booking/en/accor/hotel/0338"
     monkeypatch.setattr(provider, "_open", AsyncMock(return_value=page))
+    occupancy = AsyncMock()
+    monkeypatch.setattr(provider, "_set_occupancy", occupancy)
+    collect = AsyncMock(return_value=parse_public_rates(rendered_page(), request(), page.url))
+    monkeypatch.setattr(provider, "_collect_public_rates", collect)
     rates = await provider.search_rates(request())
+    occupancy.assert_awaited_once_with(page, request())
+    collect.assert_awaited_once_with(page, request())
     assert len(rates) == 1 and rates[0].total_price == Decimal("96.47")
     page.wait_for_url.assert_awaited_once_with("**/booking/**", wait_until="commit", timeout=45000)
     control.wait_for.assert_awaited_once_with(state="visible", timeout=45000)

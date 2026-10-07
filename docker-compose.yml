@@ -7,7 +7,7 @@ x-backend: &backend
   environment: &backend-env
     DATABASE_URL: postgresql+psycopg://hotelbug:${POSTGRES_PASSWORD:-hotelbug-local}@postgres:5432/hotelbug
     REDIS_URL: redis://redis:6379/0
-    TZ: ${TZ:-Asia/Shanghai}
+    TZ: Asia/Shanghai
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}

@@ -13,20 +13,26 @@ from app.core.errors import ErrorCode, ProviderError
 from app.core.logging import configure_logging, redact
 from app.database.session import Session
 from app.models.tables import CrawlJob, Hotel, ProviderStatus, utcnow
+from app.providers.gha_catalog import hotel_candidate_url as gha_hotel_candidate
 from app.providers.registry import create_provider
 from app.schemas.domain import JobKind, RateRequest
-from app.services.alerts import confirm_drop, detect_drops
-from app.services.ihg_catalogs import persist_catalog, record_catalog_failure
-from app.services.jobs import backoff, within_monitoring_window
+from app.services.alerts import confirm_job_drops, detect_drops
+from app.services.ihg_catalogs import directory_policy, persist_catalog, record_catalog_failure
+from app.services.jobs import backoff, cancel_outside_window, within_monitoring_window
+from app.services.provider_health import recent_healthy_scan
 from app.services.queue import Queue
 from app.services.rates import finalize_stay_scan, persist_rates, upsert_hotel
+from app.services.runtime_settings import load_runtime_settings
 
 log = logging.getLogger(__name__)
 
 
-async def execute(job: CrawlJob, hotel: Hotel | None):
+async def execute(job: CrawlJob, hotel: Hotel | None, settings: Settings | None = None):
     provider = create_provider(
-        job.provider, hotel.hotel_name if hotel else None, hotel.official_url if hotel else None
+        job.provider,
+        hotel.hotel_name if hotel else None,
+        hotel.official_url if hotel else None,
+        settings=settings,
     )
     try:
         if job.kind == JobKind.PROVIDER_HEALTHCHECK:
@@ -62,6 +68,7 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
         return False
     owner = str(uuid4())
     async with sessions() as session, session.begin():
+        settings = await load_runtime_settings(session, settings)
         job = await session.scalar(select(CrawlJob).where(CrawlJob.id == job_id).with_for_update())
         now = utcnow()
         if (
@@ -71,10 +78,24 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
         ):
             return True
         policy = settings.provider_policy(job.provider)
+        if (
+            job.provider == "gha"
+            and job.kind == JobKind.DISCOVER_HOTELS
+            and job.payload.get("official_url")
+            and gha_hotel_candidate(job.payload["official_url"]) is None
+        ):
+            # Old cached/queued promotion links should not retry an absent
+            # hotel control or consume a provider request slot. Preserve any
+            # previous error/retry evidence and the original due timestamp.
+            job.status = "CANCELLED"
+            job.error_message = (
+                (job.error_message + "; ") if job.error_message else ""
+            ) + "GHA public URL is not a hotel candidate"
+            job.lease_owner, job.lease_until = None, None
+            return True
         if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
             if not within_monitoring_window(job.check_in, job.check_out):
-                job.status = "CANCELLED"
-                job.error_message = "Stay outside the next 365 days"
+                cancel_outside_window(job)
                 return True
         if not policy.enabled:
             job.status = "CANCELLED"
@@ -85,7 +106,27 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
             job.status = "PENDING"
             job.scheduled_at = state.blocked_until
             return True
+        if (
+            job.kind == JobKind.PROVIDER_HEALTHCHECK
+            and job.payload.get("scheduled_probe") is True
+            and await recent_healthy_scan(session, job.provider, now)
+        ):
+            # Only our automatic probe is obsolete. Explicit/manual checks
+            # still run, and regular price polling is unaffected.
+            job.status = "CANCELLED"
+            job.error_type = None
+            job.error_message = "Recent successful rate scan; redundant scheduled health probe"
+            return True
         hotel = await session.get(Hotel, job.hotel_id) if job.hotel_id else None
+        if (
+            hotel
+            and not hotel.active
+            and job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY)
+        ):
+            job.status = "CANCELLED"
+            job.error_type, job.error_message = None, "Hotel disabled"
+            job.lease_owner, job.lease_until = None, None
+            return True
         job.status, job.lease_owner = "RUNNING", owner
         job.lease_until = now + timedelta(seconds=settings.lease_seconds)
     slot = await queue.provider_slot(job.provider, policy.concurrency, settings.lease_seconds)
@@ -104,11 +145,11 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
     error = None
     result = None
     try:
-        result = await asyncio.wait_for(execute(job, hotel), settings.job_timeout_seconds)
+        result = await asyncio.wait_for(execute(job, hotel, settings), settings.job_timeout_seconds)
         if job.kind == JobKind.DISCOVER_CATALOG:
-            if job.provider != "ihg" or result.provider != job.provider:
+            if result.provider != job.provider:
                 raise ProviderError(ErrorCode.INVALID_RESPONSE, "Catalog provider mismatch")
-            from app.providers.ihg_catalog import directory_url
+            _, directory_url = directory_policy(job.provider)
 
             if directory_url(str(result.source_url)) != directory_url(job.payload.get("official_url", "")):
                 raise ProviderError(ErrorCode.INVALID_RESPONSE, "Catalog URL does not match job")
@@ -155,6 +196,10 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                     average_latency=0,
                 )
                 session.add(state)
+            # The task started before this pause; Scheduler or another Worker
+            # may have recorded a rejection while its browser was in flight.
+            concurrent_pause = state.blocked_until
+            concurrent_error = state.last_error
             if state.metrics_date != utcnow().date():
                 (
                     state.metrics_date,
@@ -189,18 +234,23 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                     empty_status="NOT_OPEN",
                 )
                 if job.kind == JobKind.VERIFY_ANOMALY:
-                    await confirm_drop(session, job.payload.get("alert_id", ""), job.id, [])
+                    await confirm_job_drops(session, job, [])
                 current.status = "SUCCEEDED"
                 current.error_type, current.error_message = error.code, redact(str(error))
                 state.status, state.last_error, state.blocked_until = "ONLINE", None, None
                 state.success_count += 1
                 state.last_success = utcnow()
             elif error:
-                if job.kind == JobKind.DISCOVER_CATALOG and job.provider == "ihg":
-                    await record_catalog_failure(session, job, error)
+                if job.kind == JobKind.DISCOVER_CATALOG and job.provider in {"ihg", "marriott", "hyatt"}:
+                    await record_catalog_failure(session, job, error, settings)
                 current.retry_count += 1
                 current.error_type, current.error_message = error.code, redact(str(error))
-                transient = error.code in (ErrorCode.TIMEOUT, ErrorCode.NETWORK_ERROR, ErrorCode.RATE_LIMITED)
+                transient = error.code in (
+                    ErrorCode.TIMEOUT,
+                    ErrorCode.NETWORK_ERROR,
+                    ErrorCode.RATE_LIMITED,
+                    ErrorCode.BROWSER_STARTUP_FAILED,
+                )
                 current.status = (
                     "PENDING" if transient and current.retry_count <= settings.max_retries else "FAILED"
                 )
@@ -242,7 +292,7 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                         job.id,
                     )
                     if job.kind == JobKind.VERIFY_ANOMALY:
-                        await confirm_drop(session, job.payload.get("alert_id", ""), job.id, result)
+                        await confirm_job_drops(session, job, result)
                     else:
                         await detect_drops(session, hotel, result, settings)
                 state.status = result.status if job.kind == JobKind.PROVIDER_HEALTHCHECK else "ONLINE"
@@ -254,6 +304,20 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                     state.blocked_until = None
                 current.status = "SUCCEEDED"
                 current.error_type, current.error_message = None, None
+            now = utcnow()
+            if concurrent_pause and concurrent_pause.replace(tzinfo=now.tzinfo) > now:
+                if not state.blocked_until or state.blocked_until.replace(
+                    tzinfo=now.tzinfo
+                ) < concurrent_pause.replace(tzinfo=now.tzinfo):
+                    state.blocked_until = concurrent_pause
+                state.status = "BLOCKED"
+                if not error or error.code not in (ErrorCode.BLOCKED_BY_ANTIBOT, ErrorCode.RATE_LIMITED):
+                    state.last_error = concurrent_error
+                if current.status == "PENDING":
+                    current.scheduled_at = max(
+                        current.scheduled_at.replace(tzinfo=now.tzinfo),
+                        state.blocked_until.replace(tzinfo=now.tzinfo),
+                    )
             current.lease_owner, current.lease_until = None, None
             log.info(
                 "job finished",

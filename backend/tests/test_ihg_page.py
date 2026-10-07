@@ -54,6 +54,36 @@ def test_six_public_plans_have_explicit_room_and_rate_codes():
 
 
 @pytest.mark.parametrize(
+    "code,name,amount",
+    [
+        ("TQNN", "2 Queen Standard", "169"),
+        ("KNGN", "1 King Standard", "179"),
+        ("CSTN", "STANDARD ROOM", "189"),
+        ("KFTN", "1 King Suite", "209"),
+        ("XFTN", "1 King Suite Sofa Bed", "209"),
+        ("XSTN", "1 King Suite Wet Bar", "209"),
+    ],
+)
+def test_actual_whitecourt_inline_public_plan_fields(code, name, amount):
+    # Minimal public DOM projection of YWCAB's successful 2026-10-05/06 task.
+    request = RateRequest(provider_hotel_id="YWCAB", check_in=date(2026, 10, 5), check_out=date(2026, 10, 6))
+    url = URL.replace("LONLS", "YWCAB").replace("qCiD=20", "qCiD=05").replace("qCoD=21", "qCoD=06")
+    html = f"""<h3 data-testid="roomNameTestId" id="room-card-title-{code}">{name}</h3>
+        <div data-testid="rateCard"><button data-testid="rateNameOrPolicy">Best Flexible Rate</button>
+        <span data-testid="refundable">Fully refundable before Oct 4, 2026</span>
+        <div data-testid="priceSID"><span class="cash">{amount}</span><span class="currency">CAD</span></div>
+        <span data-testid="guest-count-info">per night</span><div data-testid="rate-card-taxes">Excludes taxes</div>
+        <button data-testid="select-btn" data-slnm-ihg="roomRate{code}IGCOR">Select</button></div>
+        <input role="switch" aria-checked="false">"""
+    rates = parse_room(html, request, url, code)
+    assert len(rates) == 1
+    rate = rates[0]
+    assert (rate.room_type, rate.room_code, rate.rate_code) == (name, code, "IGCOR")
+    assert rate.cash_price == Decimal(amount) and rate.currency == "CAD"
+    assert rate.tax is None and rate.total_price is None and rate.member_rate is False
+
+
+@pytest.mark.parametrize(
     "old,new",
     [
         ('aria-checked="false"', 'aria-checked="true"'),

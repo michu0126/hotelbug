@@ -1,4 +1,4 @@
-"""IHG official hotel page -> date controls -> expanded public room prices."""
+"""IHG official hotel page -> date controls -> inline/expanded public room prices."""
 
 import re
 from datetime import date, timedelta
@@ -8,10 +8,18 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.accor_browser import AccorBrowserProvider
-from app.providers.ihg_catalog import ROOT, directory_url, parse_catalog
+from app.providers.ihg_catalog import (
+    ROOT,
+    directory_render_pending,
+    directory_url,
+    parse_catalog,
+    verify_directory_source,
+)
 from app.providers.ihg_page import (
+    NO_ROOMS,
     WINDOW_CLOSED,
     booking_window_closed,
+    hotel_search_unavailable,
     parse_hotel,
     parse_room,
     property_identity,
@@ -101,9 +109,29 @@ class IHGBrowserProvider(AccorBrowserProvider):
                     timeout=30000,
                 )
             await self._check_access(page)
-            if directory_url(page.url) != url:
-                raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG directory redirected unexpectedly")
-            return parse_catalog(await page.content(), page.url)
+            verify_directory_source(url, page.url)
+            html = await page.content()
+            if url != ROOT and directory_render_pending(html):
+                # The real Alberta page had all 45 hotel links before its
+                # public counter became "45". Reading immediately after the
+                # first link mislabeled it partial and caused hourly re-reads.
+                # Wait briefly for the advertised counter/list to agree; a
+                # permanently empty/featured-only counter still stays partial.
+                try:
+                    await page.wait_for_function(
+                        """() => {
+                            const label = document.querySelector('[data-render-hotel-count="true"] #cmp-card__title-bar-count')?.textContent.trim().replaceAll(',', '');
+                            return !!label && /^\\d+$/.test(label) &&
+                                document.querySelectorAll('h4 a[href]').length >= Number(label);
+                        }""",
+                        timeout=5000,
+                    )
+                except BrowserTimeout:
+                    pass
+                await self._check_access(page)
+                verify_directory_source(url, page.url)
+                html = await page.content()
+            return parse_catalog(html, page.url)
         except BrowserError as exc:
             raise ProviderError(
                 ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
@@ -181,15 +209,51 @@ class IHGBrowserProvider(AccorBrowserProvider):
             # Brand headers can expose a same-name button that only scrolls to
             # this form. Submit the actual date/occupancy search component.
             await page.get_by_test_id("consolidate-search-submit-button").click()
-            await page.wait_for_url("**/find-hotels/select-roomrate?**", wait_until="commit", timeout=45000)
+            await page.wait_for_url(
+                re.compile(
+                    r"^https://www\.ihg\.com/[^?#]*/en/find-hotels/(?:select-roomrate|hotel-search)\?"
+                ),
+                wait_until="commit",
+                timeout=45000,
+            )
             stage = "room results"
             await page.wait_for_function(
-                """message => [...document.querySelectorAll('[data-testid="roomNameTestId"]')]
-                    .some(e => e.getClientRects().length) || (document.body?.innerText || '').includes(message)""",
-                arg=WINDOW_CLOSED,
+                """expected => {
+                    const card = [...document.querySelectorAll('app-hotel-card-list-view[data-testid="hotel-card"]')]
+                        .find(e => e.id === expected.hotel);
+                    return [...document.querySelectorAll('[data-testid="roomNameTestId"]')]
+                        .some(e => e.getClientRects().length) ||
+                        (document.body?.innerText || '').includes(expected.windowClosed) ||
+                        (!!card?.getClientRects().length && card.innerText.includes(expected.noRooms));
+                }""",
+                arg={
+                    "windowClosed": WINDOW_CLOSED,
+                    "noRooms": NO_ROOMS,
+                    "hotel": request.provider_hotel_id.upper(),
+                },
                 timeout=45000,
             )
             await self._check_access(page)
+            if page.url.split("?", 1)[0].endswith("/en/find-hotels/hotel-search"):
+                card = page.locator(
+                    f'app-hotel-card-list-view[data-testid="hotel-card"][id="{request.provider_hotel_id.upper()}"]'
+                )
+                if await card.count() != 1 or not await card.is_visible():
+                    raise ProviderError(
+                        ErrorCode.INVALID_RESPONSE, "IHG target unavailable hotel card not visible"
+                    )
+                if not await card.get_by_text(NO_ROOMS, exact=True).is_visible():
+                    raise ProviderError(ErrorCode.PROVIDER_CHANGED, "IHG target no-room message not visible")
+                if hotel_search_unavailable(
+                    await page.content(),
+                    page.url,
+                    request,
+                    hotel.hotel_name,
+                    await page.locator("input.calendar-input").evaluate_all("es => es.map(e => e.value)"),
+                    await page.locator("#room-and-guest").input_value(),
+                ):
+                    return []
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "IHG target no-room state not confirmed")
             if booking_window_closed(
                 await page.content(),
                 request,
@@ -213,7 +277,14 @@ class IHGBrowserProvider(AccorBrowserProvider):
             for identity in ids:
                 stage = "expand room plans"
                 room = page.locator(f"#{identity}")
-                await room.get_by_role("button", name=re.compile(r"^View prices for ")).click()
+                expand = room.get_by_role("button", name=re.compile(r"^View prices for "))
+                # Some hotels show their actual named plan immediately and
+                # have no expand button. Never click Select to inspect prices.
+                if await expand.count():
+                    await expand.click()
+                else:
+                    await room.get_by_test_id("rateCard").first.wait_for(state="visible", timeout=15000)
+                stage = "public member discount"
                 # The switch's accessible name changes after toggling; use its stable DOM identity.
                 toggle = room.locator('input[role="switch"]')
                 await toggle.wait_for(state="visible", timeout=15000)

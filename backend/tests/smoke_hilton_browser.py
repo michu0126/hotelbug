@@ -17,11 +17,16 @@ async def main():
     parser.add_argument("--channel", default="chrome")
     parser.add_argument("--session-dir")
     parser.add_argument("--code", default="LONCOCI")
+    parser.add_argument(
+        "--hotel-name", help="Use the official homepage search instead of a code-only deeplink"
+    )
     parser.add_argument("--date", type=date.fromisoformat, default=date.today() + timedelta(days=10))
     args = parser.parse_args()
     provider = HiltonBrowserProvider(
         proxy_server=args.proxy, browser_channel=args.channel, session_dir=args.session_dir
     )
+    if args.hotel_name:
+        provider.configure_hotel(args.hotel_name)
     try:
         rates = await provider.search_rates(
             RateRequest(

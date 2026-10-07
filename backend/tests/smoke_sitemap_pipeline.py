@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
 from app.core.errors import ProviderError
+from app.core.logging import redact
 from app.crawler.worker import process_one
 from app.models.tables import AppSetting, Base, CrawlJob, Hotel, NotificationLog, PriceHistory, utcnow
 from app.providers.browser_session import close_browser_sessions
@@ -21,6 +22,7 @@ from app.providers.registry import FACTORIES
 from app.schemas.domain import JobKind
 from app.services.catalogs import discover_accor, discover_gha
 from app.services.queue import Queue
+from app.services.runtime_settings import MonitoringInput, load_runtime_settings, save_runtime_settings
 from app.services.watchlists import expand_global
 
 
@@ -32,23 +34,35 @@ async def main():
     parser.add_argument("--limit", type=int, choices=range(1, 6), default=1)
     args = parser.parse_args()
     for name in FACTORIES:
-        os.environ[name.upper() + "_ENABLED"] = str(name == args.provider).lower()
+        os.environ[name.upper() + "_ENABLED"] = "false"
     os.environ["BROWSER_CHANNEL"] = "chrome"
-    if args.proxy:
-        os.environ["BROWSER_PROXY_URL"] = args.proxy
     get_settings.cache_clear()
     settings = get_settings().model_copy(update={"catalog_jobs_per_tick": 1, "global_jobs_per_tick": 1})
+    base_settings = settings
     if args.diagnostics:
         original_factory = FACTORIES[args.provider]
 
         def diagnostic_factory():
             provider = original_factory()
             original_search = provider.search_rates
+            original_discovery = provider.search_hotels
+
+            async def traced_discovery(query):
+                try:
+                    return await original_discovery(query)
+                except ProviderError as exc:
+                    print("discovery_failure=", exc.code, redact(str(exc)), flush=True)
+                    if exc.__cause__:
+                        print("discovery_cause=", redact(str(exc.__cause__)), flush=True)
+                    raise
 
             async def traced_search(request):
                 try:
                     return await original_search(request)
-                except ProviderError:
+                except ProviderError as exc:
+                    print("rate_failure=", exc.code, redact(str(exc)), flush=True)
+                    if exc.__cause__:
+                        print("rate_cause=", redact(str(exc.__cause__)), flush=True)
                     page = provider._page
                     if page and not page.is_closed():
                         print("failure_url=", page.url, flush=True)
@@ -65,6 +79,7 @@ async def main():
                     raise
 
             provider.search_rates = traced_search
+            provider.search_hotels = traced_discovery
             return provider
 
         FACTORIES[args.provider] = diagnostic_factory
@@ -74,6 +89,16 @@ async def main():
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
+        async with sessions() as session, session.begin():
+            await save_runtime_settings(
+                session,
+                MonitoringInput(
+                    providers={args.provider: {"enabled": True}},
+                    browser_proxy_url=args.proxy or "",
+                ),
+            )
+        async with sessions() as session:
+            settings = await load_runtime_settings(session, base_settings)
         redis = FakeRedis(decode_responses=True)
         queue = Queue(redis)
 
@@ -87,7 +112,7 @@ async def main():
                     max(due + 0.1, settings.provider_policy(args.provider).interval_seconds + 0.1)
                 )
                 await queue.put(job.id, job.priority)
-                await process_one(sessions, queue, settings)
+                await process_one(sessions, queue, base_settings)
                 async with sessions() as session:
                     result = await session.get(CrawlJob, job.id)
                     print(
@@ -104,7 +129,11 @@ async def main():
                         ),
                         flush=True,
                     )
-                    if result.status == "PENDING" and result.error_type in ("TIMEOUT", "NETWORK_ERROR"):
+                    if result.status == "PENDING" and result.error_type in (
+                        "TIMEOUT",
+                        "NETWORK_ERROR",
+                        "BROWSER_STARTUP_FAILED",
+                    ):
                         # Respect the production retry timestamp; never zero out
                         # a cooldown or rebuild a new job merely after a timeout.
                         continue
@@ -166,6 +195,7 @@ async def main():
                                     "automatically_scheduled_check_in": price_job.check_in.isoformat(),
                                     "live_quotes_persisted": quote_count,
                                     "manual_hotel_input": False,
+                                    "configuration_source": "DATABASE_UI_SETTINGS",
                                     "telegram_sent": False,
                                 }
                             ),

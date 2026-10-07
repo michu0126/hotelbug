@@ -15,8 +15,21 @@ async def upsert_hotel(session: AsyncSession, data: HotelData) -> Hotel:
     )
     values = data.model_dump()
     values["official_url"] = str(data.official_url)
+    for key in ("brand", "country", "region", "city", "address"):
+        if isinstance(values[key], str):
+            values[key] = values[key].strip() or None
     if row:
         for key, value in values.items():
+            # An incomplete rendered directory is a new observation, not a
+            # command to erase previously known metadata. New hotels still
+            # retain NULLs, and explicit nonempty updates remain authoritative.
+            if value is None:
+                continue
+            # HotelData defaults active=True for newly discovered properties.
+            # A source that did not observe activity cannot undo an earlier
+            # explicit inactive result; only an explicit new value can do so.
+            if key == "active" and key not in data.model_fields_set:
+                continue
             setattr(row, key, value)
     else:
         row = Hotel(**values)

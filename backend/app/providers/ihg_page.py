@@ -10,9 +10,14 @@ from bs4 import BeautifulSoup
 from app.core.errors import ErrorCode, ProviderError
 from app.schemas.domain import HotelData, RateData, RateRequest
 
-PROPERTY_PATH = re.compile(r"/([a-z0-9-]+)/hotels/([a-z]{2})/en/([a-z0-9-]+)/([a-z0-9]{5})/hoteldetail/?")
+# Real Mainland China directory links for HUALUXE omit the brand segment.
+# Keep the four capture positions stable; missing brand remains unknown.
+PROPERTY_PATH = re.compile(
+    r"(?:/([a-z0-9-]+))?/hotels/([a-z]{2})/en/([a-z0-9-]+)/([a-z0-9]{5})/hoteldetail/?"
+)
 AMOUNT = re.compile(r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?")
 WINDOW_CLOSED = "Rooms cannot be booked this far in advance. Please change dates."
+NO_ROOMS = "No rooms available for selected dates"
 
 
 def property_identity(url: str):
@@ -38,15 +43,16 @@ def parse_hotel(html: str, url: str) -> HotelData:
     )
 
 
-def verify_booking(url: str, request: RateRequest):
+def _verify_stay_query(url: str, request: RateRequest, *, selected_hotel=True):
     parsed = urlparse(url)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != "www.ihg.com"
-        or not parsed.path.endswith("/en/find-hotels/select-roomrate")
-    ):
-        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG booking page identity invalid")
     query = parse_qs(parsed.query, keep_blank_values=True)
+    # The observed public form pads days 1–9 (05/06); earlier pilots used
+    # 20/21 and missed this. Normalize only a single valid calendar-day value,
+    # not duplicate, signed, decimal, malformed or mismatching date fields.
+    for key in ("qCiD", "qCoD"):
+        values = query.get(key)
+        if values and len(values) == 1 and re.fullmatch(r"0?[1-9]|[12][0-9]|3[01]", values[0]):
+            query[key] = [str(int(values[0]))]
     expected = {
         "qSlH": request.provider_hotel_id.upper(),
         "qRms": str(request.rooms),
@@ -59,8 +65,97 @@ def verify_booking(url: str, request: RateRequest):
         "qCoMy": f"{request.check_out.month - 1:02d}{request.check_out.year}",
         "qRtP": "6CBARC",
     }
-    if any(query.get(key) != [value] for key, value in expected.items()):
-        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG hotel, dates or occupancy mismatch")
+    if not selected_hotel:
+        # The observed unavailable response redirects to hotel-search and drops
+        # qSlH. Its exact hotel code must instead be proven by the selected card.
+        expected.pop("qSlH")
+        if "qSlH" in query:
+            expected["qSlH"] = request.provider_hotel_id.upper()
+    mismatches = [key for key, value in expected.items() if query.get(key) != [value]]
+    if mismatches:
+        # Only these public stay/plan fields, never the complete query (which
+        # can contain unrelated tracking or authentication information).
+        def observed(key):
+            values = query.get(key)
+            if (
+                key in {"qCiD", "qCoD", "qCiMy", "qCoMy"}
+                and values
+                and len(values) == 1
+                and re.fullmatch(r"[0-9]{1,6}", values[0])
+            ):
+                return values[0]
+            return "different"
+
+        detail = ", ".join(f"{key}: expected={expected[key]}, observed={observed(key)}" for key in mismatches)
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG hotel, dates or occupancy mismatch; " + detail)
+
+
+def verify_booking(url: str, request: RateRequest):
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.ihg.com"
+        or parsed.fragment
+        or not parsed.path.endswith("/en/find-hotels/select-roomrate")
+    ):
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG booking page identity invalid")
+    _verify_stay_query(url, request)
+
+
+def hotel_search_unavailable(
+    html: str, url: str, request: RateRequest, hotel_name: str, dates: list[str], guests: str
+) -> bool:
+    """Only the target card's explicit no-room state, never another hotel's text.
+
+    Caller additionally requires the target card and its exact message visible.
+    Public list starting prices are not parsed as offers.
+    """
+    parsed = urlparse(url)
+    if not parsed.path.endswith("/en/find-hotels/hotel-search"):
+        return False
+    if parsed.scheme != "https" or parsed.netloc != "www.ihg.com" or parsed.fragment:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG hotel search page identity invalid")
+    soup = BeautifulSoup(html, "html.parser")
+    code = request.provider_hotel_id.upper()
+    cards = [
+        card
+        for card in soup.select('app-hotel-card-list-view[data-testid="hotel-card"]')
+        if card.get("id") == code
+    ]
+    if len(cards) != 1:
+        raise ProviderError(
+            ErrorCode.INVALID_RESPONSE, "IHG target unavailable hotel card missing or duplicated"
+        )
+    card = cards[0]
+    if NO_ROOMS not in card.get_text(" ", strip=True):
+        return False
+    headings = card.select('h2[data-testid="brandHotelNameSID"]')
+    if len(headings) != 1 or headings[0].get_text(" ", strip=True) != hotel_name:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG unavailable hotel name mismatch")
+    identities = set()
+    for link in card.select("a[href]"):
+        candidate = urlparse(link.get("href", ""))
+        match = PROPERTY_PATH.fullmatch(candidate.path)
+        if candidate.scheme == "https" and candidate.netloc == "www.ihg.com" and match:
+            # This is identity evidence in the already-rendered card, not a
+            # URL to navigate. Public website links may carry tracking query/
+            # fragment fields; they don't change their explicit hotel path.
+            selected = parse_qs(candidate.query, keep_blank_values=True).get("qSlH")
+            if selected is not None and selected != [code]:
+                raise ProviderError(
+                    ErrorCode.INVALID_RESPONSE, "IHG unavailable hotel official link mismatch"
+                )
+            identities.add(match[4].upper())
+    if identities != {code}:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG unavailable hotel official link mismatch")
+    _verify_stay_query(url, request, selected_hotel=False)
+    if dates != [
+        f"{day.month:02d}/{day.day:02d}/{day.year}" for day in (request.check_in, request.check_out)
+    ]:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG displayed stay dates mismatch")
+    if guests != f"1 Room, {request.adults} Guest" + ("s" if request.adults != 1 else ""):
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG displayed guest count mismatch")
+    return True
 
 
 def verify_displayed_stay(html: str, request: RateRequest, hotel_name: str, dates: list[str], guests: str):

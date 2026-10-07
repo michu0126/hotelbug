@@ -68,7 +68,23 @@ def test_featured_subset_is_explicitly_partial_but_preserves_discoverable_hotels
     result = parse_catalog(directory_html(total=5), ALABAMA)
     assert not result.complete and len(result.hotels) == 1
     unsupported = '<h4><a href="https://www.ihg.com/other-format">New Hotel</a></h4>'
-    assert not parse_catalog(directory_html(total=2, extra=unsupported), ALABAMA).complete
+    partial = parse_catalog(directory_html(total=2, extra=unsupported), ALABAMA)
+    assert not partial.complete and partial.unparsed_hotel_links == 1
+
+
+@pytest.mark.parametrize(
+    "bad_link",
+    [
+        '<h4><a href="https://example.com/hotel">External Hotel</a></h4>',
+        '<h4><a href="https://www.ihg.com/other-format">Unsupported Hotel</a></h4>',
+        f'<h4><a href="{HOTEL_URL}?token=private">Different query</a></h4>',
+        f'<h4><a href="{HOTEL_URL}"> </a></h4>',
+    ],
+)
+def test_unparsed_directory_links_are_counted_not_silently_accepted(bad_link):
+    result = parse_catalog(directory_html(total=2, extra=bad_link), ALABAMA)
+    assert result.unparsed_hotel_links == 1 and not result.complete
+    assert len(result.hotels) == 1
 
 
 def test_small_city_without_count_still_produces_real_hotel_not_timeout():
@@ -128,6 +144,64 @@ async def test_browser_catalog_waits_for_hotel_links_when_counter_absent(monkeyp
     page.wait_for_function.assert_awaited_once()
     assert "h4 a[href]" in page.wait_for_function.await_args.args[0]
     assert page.goto.await_args.kwargs["wait_until"] == "commit"
+
+
+@pytest.mark.parametrize(
+    "state", ["late_counter", "late_cards", "empty_counter", "no_counter", "redirect", "access_denied"]
+)
+async def test_directory_counter_hydration_does_not_fake_completeness(monkeypatch, state):
+    from unittest.mock import MagicMock
+
+    from playwright.async_api import TimeoutError as BrowserTimeout
+
+    from app.providers.ihg_browser import IHGBrowserProvider
+
+    provider = IHGBrowserProvider()
+    page = MagicMock()
+    page.url = ALABAMA
+    page.goto = AsyncMock(return_value=MagicMock(status=200))
+    page.title = AsyncMock(return_value="Alabama Hotels")
+    initial = "<h2>Featured Hotels in Alabama</h2>" + directory_html(total="")
+    final = directory_html(total=1)
+    if state == "late_cards":
+        initial = directory_html(total=2)
+        second = '<h4><a href="https://www.ihg.com/holidayinn/hotels/us/en/offline/test1/hoteldetail">Second Hotel</a></h4>'
+        final = directory_html(total=2, extra=second)
+    if state == "no_counter":
+        initial = "<h2>Featured Hotels in Alabama</h2>" + initial.replace(
+            'data-render-hotel-count="true"', 'data-no-counter="true"'
+        )
+    if state == "empty_counter":
+        final = initial
+    page.content = AsyncMock(side_effect=[initial, final])
+
+    async def wait(*args, **kwargs):
+        if kwargs.get("timeout") == 5000:
+            if state == "empty_counter":
+                raise BrowserTimeout("Offline permanently empty counter")
+            if state == "redirect":
+                page.url = "https://www.ihg.com/another-directory"
+            if state == "access_denied":
+                page.title.return_value = "Access Denied"
+
+    page.wait_for_function = AsyncMock(side_effect=wait)
+    monkeypatch.setattr(provider, "_get_page", AsyncMock(return_value=page))
+    if state in ("redirect", "access_denied"):
+        with pytest.raises(ProviderError) as raised:
+            await provider.discover_catalog({"official_url": ALABAMA})
+        assert raised.value.code == (
+            ErrorCode.INVALID_RESPONSE if state == "redirect" else ErrorCode.BLOCKED_BY_ANTIBOT
+        )
+    else:
+        result = await provider.discover_catalog({"official_url": ALABAMA})
+        assert result.complete is (state in ("late_counter", "late_cards"))
+        if state == "no_counter":
+            assert result.reported_total is None and page.wait_for_function.await_count == 1
+        else:
+            assert page.wait_for_function.await_count == 2
+            assert page.wait_for_function.await_args.kwargs["timeout"] == 5000
+        if state == "late_cards":
+            assert len(result.hotels) == result.reported_total == 2
 
 
 async def test_scheduler_root_resume_and_worker_hotels_reach_global_price_jobs(sessions, queue, monkeypatch):

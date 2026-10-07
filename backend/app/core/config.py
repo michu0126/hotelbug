@@ -5,6 +5,14 @@ from functools import lru_cache
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.anomaly_config import AnomalyPolicy
+
+
+class ProviderPolicy(BaseModel):
+    enabled: bool = True
+    concurrency: int = Field(default=1, ge=1, le=4)
+    interval_seconds: int = Field(default=5, ge=1, le=3600)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -26,6 +34,9 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_proxy_url: SecretStr = SecretStr("")
     alert_drop_fraction: Decimal = Field(default=Decimal("0.5"), gt=0, lt=1)
+    alert_renotify_drop_fraction: Decimal = Field(default=Decimal("0.2"), gt=0, lt=1)
+    alert_historical_lows_enabled: bool = True
+    anomaly_policy: AnomalyPolicy = Field(default_factory=AnomalyPolicy)
     alert_min_history_days: int = Field(default=3, ge=2, le=90)
     alert_confirmation_seconds: int = Field(default=60, ge=5, le=3600)
     global_monitoring_enabled: bool = True
@@ -37,12 +48,15 @@ class Settings(BaseSettings):
     browser_session_dir: str = ".browser-sessions" if os.name == "nt" else "/data/browser-sessions"
     bark_url: SecretStr = SecretStr("")
     webhook_url: SecretStr = SecretStr("")
+    provider_overrides: dict[str, "ProviderPolicy"] = Field(default_factory=dict)
 
     @property
     def lease_seconds(self) -> int:
         return self.job_timeout_seconds + 60
 
     def provider_policy(self, name: str) -> "ProviderPolicy":
+        if name in self.provider_overrides:
+            return self.provider_overrides[name]
         prefix = name.upper()
         return ProviderPolicy(
             enabled=os.getenv(prefix + "_ENABLED", "false"),
@@ -51,12 +65,6 @@ class Settings(BaseSettings):
                 prefix + "_RATE_LIMIT_SECONDS", str(self.provider_min_interval_seconds)
             ),
         )
-
-
-class ProviderPolicy(BaseModel):
-    enabled: bool = True
-    concurrency: int = Field(default=1, ge=1, le=4)
-    interval_seconds: int = Field(default=5, ge=1, le=3600)
 
 
 @lru_cache

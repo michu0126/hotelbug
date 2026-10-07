@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from email.utils import parsedate_to_datetime
+from math import ceil
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -13,6 +15,7 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.accor_browser import AccorBrowserProvider, name_key
+from app.providers.gha_catalog import hotel_candidate_url
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://www.ghadiscovery.com"
@@ -72,7 +75,7 @@ def verify_stay(html: str, url: str, search: RateRequest) -> None:
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "GHA displayed dates or occupancy mismatch")
 
 
-def public_room(html: str) -> tuple[str, str, Decimal]:
+def public_room(html: str, *, allow_member_identity: bool = False) -> tuple[str, str, Decimal]:
     """Read room/currency identity; the card's FROM amount is never stored as a rate."""
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.select_one("h5.px-5")
@@ -82,6 +85,10 @@ def public_room(html: str) -> tuple[str, str, Decimal]:
         # separate member/non-member columns. Eligibility is checked on named
         # plans after opening View Rates, not inferred from this summary.
         label = soup.find("span", string="FROM")
+    if label is None and allow_member_identity:
+        # Actual Amalfi extra-bed cards advertise only a member summary. Its
+        # amount is not a public quote; named plans still enforce eligibility.
+        label = soup.find("span", string="MEMBER RATES FROM")
     price = label.parent.find("h5") if label else None
     money = MONEY.fullmatch(price.get_text(" ", strip=True)) if price else None
     if not heading or not money or "Including taxes and fees" not in soup.get_text(" ", strip=True):
@@ -93,6 +100,40 @@ def public_room(html: str) -> tuple[str, str, Decimal]:
 
 def no_availability(html: str) -> bool:
     return NO_AVAILABILITY in BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+
+
+def public_detail_location(html: str) -> dict[str, str | None] | None:
+    """Actual public hotel header address/city-country slots, not menu labels."""
+    soup = BeautifulSoup(html, "html.parser")
+    headings = soup.select('h1[class*="HotelPage_hotelName__"]')
+    if len(headings) != 1:
+        return None
+    heading = headings[0]
+    name = heading.get_text(" ", strip=True)
+    if not name:
+        return None
+    result = {"hotel_name": name, "address": None, "city": None, "country": None}
+    block = heading.find_next_sibling("div")
+    if not block or not {"flex", "flex-col"}.issubset(block.get("class", [])):
+        return result
+    slots = block.find_all("div", recursive=False)
+    # The observed desktop header has street, city-country and Tel./View Map
+    # slots. If this changes, retain unknown fields rather than infer a location.
+    if len(slots) != 3 or "View Map" not in slots[2].get_text(" ", strip=True):
+        return result
+    address = " ".join(slots[0].get_text(" ", strip=True).split())
+    result["address"] = address or None
+    label = " ".join(slots[1].get_text(" ", strip=True).split())
+    parts = [part.strip() for part in label.split(",")]
+    # Actual Nice header: "06 000, Nice, France". Remove only the
+    # observed leading numeric postal slot, not an arbitrary region label.
+    if len(parts) == 3 and re.fullmatch(r"[0-9]{4,10}", parts[0].replace(" ", "")):
+        parts = parts[1:]
+    if len(parts) == 2:
+        city, country = parts
+        if city and country and not any(character.isdigit() for character in country):
+            result.update(city=city, country=country)
+    return result
 
 
 def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRequest) -> RateData | None:
@@ -136,6 +177,31 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
 class GHABrowserProvider(AccorBrowserProvider):
     session_provider = "gha"
 
+    async def _check_public_response(self, response):
+        if response is None or response.status < 400:
+            return
+        status = response.status
+        retry_after = None
+        if status == 429:
+            value = (await response.header_value("retry-after") or "").strip()
+            if value.isdecimal() and len(value) <= 9:
+                retry_after = int(value)
+            else:
+                try:
+                    until = parsedate_to_datetime(value)
+                    if until.tzinfo is not None:
+                        retry_after = max(0, ceil((until - datetime.now(timezone.utc)).total_seconds()))
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        code = (
+            ErrorCode.BLOCKED_BY_ANTIBOT
+            if status in (401, 403)
+            else ErrorCode.RATE_LIMITED
+            if status == 429
+            else ErrorCode.HTTP_ERROR
+        )
+        raise ProviderError(code, f"GHA HTTP {status}", retry_after=retry_after)
+
     async def _expand_rate_pages(self, page):
         """Follow all displayed pagination controls; mobile duplicates are not progress."""
         more = page.locator(".tid-viewMoreRates:visible")
@@ -163,15 +229,7 @@ class GHABrowserProvider(AccorBrowserProvider):
             )
         page = await self._get_page()
         response = await page.goto(booking_url(search), wait_until="domcontentloaded", timeout=45000)
-        if response and response.status >= 400:
-            code = (
-                ErrorCode.BLOCKED_BY_ANTIBOT
-                if response.status == 403
-                else ErrorCode.RATE_LIMITED
-                if response.status == 429
-                else ErrorCode.HTTP_ERROR
-            )
-            raise ProviderError(code, f"GHA HTTP {response.status}")
+        await self._check_public_response(response)
         await page.locator(".tid-editStay").wait_for(state="attached")
         verify_stay(await page.content(), page.url, search)
         return page
@@ -204,24 +262,37 @@ class GHABrowserProvider(AccorBrowserProvider):
     async def search_hotels(self, query: dict) -> list[HotelData]:
         if query.get("official_url"):
             url = urlparse(query["official_url"])
-            if (
-                url.scheme != "https"
-                or url.hostname != "www.ghadiscovery.com"
-                or not re.fullmatch(r"/[a-z0-9-]+/[a-z0-9-]+/?", url.path)
-            ):
+            if hotel_candidate_url(url.geturl()) != url.geturl().rstrip("/"):
                 raise ProviderError(ErrorCode.INVALID_RESPONSE, "GHA catalog URL invalid")
             try:
                 page = await self._get_page()
                 response = await page.goto(url.geturl(), wait_until="domcontentloaded", timeout=45000)
-                if response and response.status >= 400:
-                    raise ProviderError(ErrorCode.HTTP_ERROR, f"GHA catalog HTTP {response.status}")
+                await self._check_public_response(response)
                 link = page.locator('a[href*="/booking/select_room?"]').first
                 await link.wait_for(state="attached", timeout=15000)
                 target = urlparse(urljoin(ROOT, await link.get_attribute("href")))
                 if target.hostname != "www.ghadiscovery.com":
                     raise ProviderError(ErrorCode.INVALID_RESPONSE, "GHA booking link off-site")
                 code = parse_qs(target.query).get("hotelId", [""])[0]
-                return [await self.get_hotel_details(hotel_code(code))]
+                location = public_detail_location(await page.content())
+                observed_url = urlparse(page.url)
+                details = await self.get_hotel_details(hotel_code(code))
+                verified_url = urlparse(str(details.official_url))
+                if (
+                    location
+                    and " ".join(location["hotel_name"].casefold().split())
+                    == " ".join(details.hotel_name.casefold().split())
+                    and observed_url.hostname == verified_url.hostname == "www.ghadiscovery.com"
+                    and observed_url.path.rstrip("/") == verified_url.path.rstrip("/")
+                ):
+                    details = details.model_copy(
+                        update={
+                            key: value
+                            for key, value in location.items()
+                            if key != "hotel_name" and value is not None
+                        }
+                    )
+                return [details]
             except BrowserError as exc:
                 raise ProviderError(
                     ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
@@ -256,7 +327,7 @@ class GHABrowserProvider(AccorBrowserProvider):
                 html = await button.evaluate(
                     'e=>{let p=e; while(p){if(p.querySelector("h5.px-5")) return p.outerHTML;p=p.parentElement;}return ""}'
                 )
-                room = public_room(html)
+                room = public_room(html, allow_member_identity=True)
                 await button.click()
                 await page.locator(".tid-selectBtn:visible").first.wait_for()
                 await self._expand_rate_pages(page)

@@ -94,6 +94,74 @@ def test_explicit_member_only_summary_is_not_used_as_from_fallback():
         public_room(ROOM.replace("NON-MEMBER RATES", "MEMBER RATES FROM"))
 
 
+def test_actual_amalfi_member_summary_is_identity_only_never_saved_as_public_price():
+    card = '<h5 class="px-5">Junior Suite with Views and Extra Bed</h5><div><span>MEMBER RATES FROM</span><h5>EUR 1,877</h5></div><span>Including taxes and fees</span>'
+    room = public_room(card, allow_member_identity=True)
+    assert room == ("Junior Suite with Views and Extra Bed", "EUR", Decimal("1877"))
+    assert parse_public_offer(card, room, SEARCH) is None
+    member = OFFER.replace("THB", "EUR").replace("Avani Flexi", "DISCOVERY Flexible Rate")
+    assert parse_public_offer(member, room, SEARCH) is None
+    public = (
+        OFFER.replace("THB", "EUR").replace("6,944", "1,920").replace("Avani Flexi", "Best Flexible Rate")
+    )
+    rate = parse_public_offer(public, room, SEARCH)
+    assert rate.total_price == Decimal("1920") and rate.member_rate is False
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [("Including taxes and fees", "Excluding taxes"), ("EUR 1,877", "1,877"), ("px-5", "different")],
+)
+def test_member_identity_does_not_relax_room_currency_or_tax_guards(old, new):
+    card = '<h5 class="px-5">Junior Suite with Views and Extra Bed</h5><div><span>MEMBER RATES FROM</span><h5>EUR 1,877</h5></div><span>Including taxes and fees</span>'
+    with pytest.raises(ProviderError):
+        public_room(card.replace(old, new), allow_member_identity=True)
+
+
+async def test_member_only_room_does_not_abort_public_quotes_from_other_rooms(monkeypatch):
+    provider = GHABrowserProvider()
+    page = MagicMock()
+    page.url = booking_url(SEARCH)
+    page.content = AsyncMock(return_value=STAY)
+    page.wait_for_function = AsyncMock()
+    checkbox = page.get_by_role.return_value
+    checkbox.is_checked = AsyncMock(return_value=True)
+    page.get_by_text.return_value.first.wait_for = AsyncMock()
+    buttons = MagicMock()
+    buttons.count = AsyncMock(return_value=3)
+    controls = []
+    for index in range(3):
+        button = MagicMock()
+        card = ROOM.replace("DELUXE KING", f"ROOM {index}")
+        if index == 1:
+            card = card.replace("NON-MEMBER RATES", "MEMBER RATES FROM")
+        button.evaluate = AsyncMock(return_value=card)
+        button.click = AsyncMock()
+        controls.append(button)
+    buttons.nth.side_effect = lambda index: controls[index]
+    plans = MagicMock()
+    plans.first.wait_for = AsyncMock()
+    plans.evaluate_all = AsyncMock(
+        side_effect=[
+            [OFFER],
+            [OFFER.replace("Avani Flexi", "DISCOVERY Flexible Rate")],
+            [OFFER],
+        ]
+    )
+    close = MagicMock()
+    close.click = AsyncMock()
+    page.locator.side_effect = lambda selector: (
+        buttons if "tid-viewRates" in selector else close if "closeButton" in selector else plans
+    )
+    monkeypatch.setattr(provider, "_open_booking", AsyncMock(return_value=page))
+    monkeypatch.setattr(provider, "_expand_rate_pages", AsyncMock())
+    rates = await provider.search_rates(SEARCH)
+    assert {rate.room_type for rate in rates} == {"ROOM 0", "ROOM 2"}
+    assert all(rate.member_rate is False for rate in rates)
+    assert all(button.click.await_count == 1 for button in controls) and close.click.await_count == 3
+    plans.click.assert_not_called()
+
+
 @pytest.mark.parametrize("old,new", [("07 Oct", "08 Oct"), ("2026", "2027"), ("2 ADULTS", "3 ADULTS")])
 def test_stay_mismatch(old, new):
     with pytest.raises(ProviderError):

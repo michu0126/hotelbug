@@ -1,8 +1,15 @@
 from collections.abc import Callable
+from contextvars import ContextVar
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.base import HotelProvider
+
+_runtime_settings: ContextVar[Settings | None] = ContextVar("provider_settings", default=None)
+
+
+def provider_settings() -> Settings:
+    return _runtime_settings.get() or get_settings()
 
 
 def marriott_browser() -> HotelProvider:
@@ -13,7 +20,7 @@ def marriott_browser() -> HotelProvider:
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
 
-    settings = get_settings()
+    settings = provider_settings()
     return MarriottBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
@@ -30,7 +37,7 @@ def accor_browser() -> HotelProvider:
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
 
-    settings = get_settings()
+    settings = provider_settings()
     return AccorBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
@@ -45,7 +52,7 @@ def hilton_browser() -> HotelProvider:
         raise ProviderError(
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
-    settings = get_settings()
+    settings = provider_settings()
     return HiltonBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
@@ -60,7 +67,7 @@ def gha_browser() -> HotelProvider:
         raise ProviderError(
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
-    settings = get_settings()
+    settings = provider_settings()
     return GHABrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
@@ -75,8 +82,23 @@ def ihg_browser() -> HotelProvider:
         raise ProviderError(
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
-    settings = get_settings()
+    settings = provider_settings()
     return IHGBrowserProvider(
+        proxy_server=settings.browser_proxy_url.get_secret_value() or None,
+        browser_channel=settings.browser_channel or None,
+        session_dir=settings.browser_session_dir,
+    )
+
+
+def hyatt_browser() -> HotelProvider:
+    try:
+        from app.providers.hyatt_browser import HyattBrowserProvider
+    except ImportError as exc:
+        raise ProviderError(
+            ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
+        ) from exc
+    settings = provider_settings()
+    return HyattBrowserProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
         session_dir=settings.browser_session_dir,
@@ -89,17 +111,25 @@ FACTORIES: dict[str, Callable[[], HotelProvider]] = {
     "gha": gha_browser,
     "hilton": hilton_browser,
     "ihg": ihg_browser,
+    "hyatt": hyatt_browser,
 }
 
 
 def create_provider(
-    name: str, hotel_name: str | None = None, official_url: str | None = None
+    name: str,
+    hotel_name: str | None = None,
+    official_url: str | None = None,
+    settings: Settings | None = None,
 ) -> HotelProvider:
     if name not in FACTORIES:
         raise ProviderError(
             ErrorCode.NOT_IMPLEMENTED, "Provider pending verified research and implementation"
         )
-    provider = FACTORIES[name]()
+    token = _runtime_settings.set(settings)
+    try:
+        provider = FACTORIES[name]()
+    finally:
+        _runtime_settings.reset(token)
     if hotel_name:
         configure_hotel = getattr(provider, "configure_hotel", None)
         if callable(configure_hotel):

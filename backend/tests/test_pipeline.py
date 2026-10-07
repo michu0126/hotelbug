@@ -1,6 +1,7 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import func, select
 from test_domain import fixture_rate
 
@@ -139,6 +140,9 @@ async def test_failure_keeps_stage_but_redacts_secrets(sessions, queue, monkeypa
 
 
 async def test_unimplemented_provider_does_not_fake_success(sessions, queue, monkeypatch):
+    # Exercise a missing adapter without accidentally contacting a live source
+    # when the final remaining provider is implemented.
+    monkeypatch.delitem(FACTORIES, "hyatt", raising=False)
     monkeypatch.setenv("HYATT_ENABLED", "true")
     async with sessions() as s, s.begin():
         row = await enqueue(s, JobInput(provider="hyatt", kind=JobKind.PROVIDER_HEALTHCHECK))
@@ -148,6 +152,68 @@ async def test_unimplemented_provider_does_not_fake_success(sessions, queue, mon
     async with sessions() as s:
         row = await s.get(CrawlJob, job_id)
         assert row.status == "FAILED" and row.error_type == "NOT_IMPLEMENTED"
+
+
+@pytest.mark.parametrize("code", [ErrorCode.TIMEOUT, ErrorCode.BROWSER_STARTUP_FAILED])
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_local_browser_startup_retries_are_bounded(sessions, queue, monkeypatch, code, recovers):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+    attempts = 0
+
+    class Startup(FixtureProvider):
+        async def health_check(self):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1 or not recovers:
+                raise ProviderError(code, "local startup failure")
+            return await super().health_check()
+
+    monkeypatch.setitem(FACTORIES, "marriott", Startup)
+    settings = Settings(max_retries=1)
+    async with sessions() as s, s.begin():
+        row = await enqueue(s, JobInput(provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK))
+        job_id = row.id
+    await queue.put(job_id, 80)
+    await process_one(sessions, queue, settings)
+    async with sessions() as s, s.begin():
+        row = await s.get(CrawlJob, job_id)
+        state = await s.get(ProviderStatus, "marriott")
+        assert row.status == "PENDING" and row.retry_count == 1
+        assert row.scheduled_at.replace(tzinfo=utcnow().tzinfo) > utcnow()
+        assert state.status == "DEGRADED" and state.blocked_until is None
+        assert row.lease_owner is None and row.lease_until is None
+        row.scheduled_at = utcnow() - timedelta(seconds=1)  # Isolated test clock, not a live cooldown reset.
+    await queue.redis.flushdb()
+    await queue.put(job_id, 80)
+    await process_one(sessions, queue, settings)
+    async with sessions() as s:
+        row = await s.get(CrawlJob, job_id)
+        state = await s.get(ProviderStatus, "marriott")
+        assert attempts == 2
+        assert row.status == ("SUCCEEDED" if recovers else "FAILED")
+        assert state.status == ("ONLINE" if recovers else "DEGRADED")
+        assert row.retry_count == (1 if recovers else 2)
+        assert state.blocked_until is None
+        assert row.lease_owner is None and row.lease_until is None
+
+
+async def test_missing_browser_is_not_retried(sessions, queue, monkeypatch):
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+
+    class MissingBrowser(FixtureProvider):
+        async def health_check(self):
+            raise ProviderError(ErrorCode.BROWSER_UNAVAILABLE, "Browser is not installed")
+
+    monkeypatch.setitem(FACTORIES, "marriott", MissingBrowser)
+    async with sessions() as s, s.begin():
+        row = await enqueue(s, JobInput(provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK))
+        job_id = row.id
+    await queue.put(job_id, 80)
+    await process_one(sessions, queue, Settings())
+    async with sessions() as s:
+        row = await s.get(CrawlJob, job_id)
+        assert row.status == "FAILED" and row.retry_count == 1
+        assert (await s.get(ProviderStatus, "marriott")).status == "BROKEN"
 
 
 async def test_watchlist_incremental_jobs_respect_cooldown(sessions, queue, monkeypatch):
@@ -170,7 +236,9 @@ async def test_watchlist_incremental_jobs_respect_cooldown(sessions, queue, monk
                 .order_by(CrawlJob.check_in)
             )
         ).all()
-        assert len(dates) == 3 and len(set(dates)) == 3
+        # Two monitored check-in dates including today, not an inclusive
+        # two-day offset that accidentally adds a third date.
+        assert dates == [date.today(), date.today() + timedelta(days=1)]
         s.add(
             ProviderStatus(provider="marriott", status="BLOCKED", blocked_until=utcnow() + timedelta(hours=6))
         )
@@ -183,5 +251,5 @@ async def test_watchlist_incremental_jobs_respect_cooldown(sessions, queue, monk
                 .select_from(CrawlJob)
                 .where(CrawlJob.kind == JobKind.FETCH_RATE, CrawlJob.hotel_id == hotel.id)
             )
-            == 3
+            == 2
         )

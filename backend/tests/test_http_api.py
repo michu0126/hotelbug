@@ -52,6 +52,7 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert [s["provider"] for s in states if s["implemented"]] == [
                 "marriott",
                 "ihg",
+                "hyatt",
                 "hilton",
                 "accor",
                 "gha",
@@ -63,6 +64,10 @@ async def test_api_live_providers_and_write_guard(sessions):
             assert (
                 next(s for s in states if s["provider"] == "ihg")["verification"]
                 == "PUBLIC_PAGE_SAMPLE_VERIFIED"
+            )
+            assert (
+                next(s for s in states if s["provider"] == "hyatt")["verification"]
+                == "PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED"
             )
             assert not any(s["enabled"] for s in states)
             result = await client.post(
@@ -135,7 +140,12 @@ async def test_catalog_api_reports_sitemap_candidates_without_fake_hotel_counts(
             "maps": ["one", "two", "three"],
             "map_cursor": 2,
             "missing_maps": ["one"],
-            "urls": ["property-one", "property-two"],
+            "urls": [
+                "https://www.ghadiscovery.com/brand/property-one",
+                "https://www.ghadiscovery.com/brand/property-two",
+            ]
+            if provider == "gha"
+            else ["property-one", "property-two"],
             "cursor": 1,
         }
     )

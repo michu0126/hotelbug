@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.errors import ProviderError
-from app.providers.hilton_page import parse_public_rates
+from app.providers.hilton_page import parse_public_rates, stay_label_expectations
 from app.schemas.domain import RateRequest
 
 SEARCH = RateRequest(provider_hotel_id="LONCOCI", check_in=date(2026, 10, 20), check_out=date(2026, 10, 21))
@@ -46,7 +46,8 @@ def parse(html=None, **kwargs):
 
 def test_public_rows_pair_with_their_own_plan_not_cheaper_member_rows():
     rates = parse()
-    assert [rate.total_price for rate in rates] == list(map(Decimal, ("595", "584", "548", "583")))
+    assert [rate.cash_price for rate in rates] == list(map(Decimal, ("595", "584", "548", "583")))
+    assert all(rate.total_price is None for rate in rates)
     assert [rate.rate_code for rate in rates] == [
         "public:LV0",
         "public:R3X",
@@ -64,7 +65,6 @@ def test_public_rows_pair_with_their_own_plan_not_cheaper_member_rows():
     [
         ("2026年10月21日", "2027年10月21日"),
         ("2 位成人", "1 位成人"),
-        ("價格含稅", "價格未含稅"),
         ("所示價格為每晚平均價格。", "Starting from"),
         ("£548", "£548,50"),
         ("PR09APInfoModalTrigger", "LV0InfoModalTrigger"),
@@ -92,3 +92,136 @@ def test_wrong_identity_and_missing_currency_rejected(field, value):
 def test_original_rooms_page_identity_required(old, new):
     with pytest.raises(ProviderError):
         parse(rooms_url=ROOMS_URL.replace(old, new))
+
+
+ENGLISH_HOTEL = "Conrad London St. James"
+ENGLISH_ROOM = "King Deluxe Room"
+ENGLISH_ROOMS_URL = ROOMS_URL.replace("/zh-hant/", "/en/")
+
+
+def english_rendered_page():
+    # Projection of the normal homepage -> search -> rooms -> rates flow,
+    # observed on 2026-10-01. No cookies, search tokens or hidden payloads.
+    html = f"""<button data-testid="search-edit-button" aria-label="edit stay details
+    {ENGLISH_HOTEL}, Tuesday, October 20, 2026 through Wednesday, October 21, 2026,
+    1 room for 2 adults"></button><span data-testid="hotelName">{ENGLISH_HOTEL}</span>
+    <button data-testid="roomSelectedLabel"><span class="flex-1">{ENGLISH_ROOM}</span>
+    <span>Change Room<span>{ENGLISH_ROOM}</span></span></button>
+    <p>Prices shown are average per night.</p><p>Prices include taxes in British Pound</p>
+    <select id="selectCurrencyConverter"><option selected value="GBP">GBP</option></select>
+    <div class="grid">"""
+    for code, name, price, terms in (
+        ("LV0", "Flexible Rate", "595", "Change or cancel by October 19th 2026. Room only."),
+        ("R3X", "Semi-Flex", "584", "Change or cancel by October 15th 2026. Room only."),
+        ("PR09AP", "Advance Purchase", "546", "No cancellations. Pay now."),
+        (
+            "PR09BB",
+            "Breakfast Included",
+            "631",
+            "Change or cancel by October 19th 2026. Includes breakfast daily.",
+        ),
+        (
+            "B3F",
+            "Semi-Flex Breakfast Included",
+            "619",
+            "Change or cancel by October 15th 2026. Includes breakfast daily.",
+        ),
+        (
+            "CX09AP",
+            "Advance Purchase Breakfast Included",
+            "581",
+            "Breakfast included. No cancellations. Pay now.",
+        ),
+    ):
+        html += f'''<div data-testid="rateTableDescriptionCell"><h2 data-testid="rateNameText">{name}</h2>
+        <div data-testid="rateDescriptionText">{terms}</div></div>
+        <div data-testid="rateTableStandardCell"><div data-testid="standardRateBlock">
+        <div data-testid="ratePrice"><p>£{price}</p><button id="{code}InfoModalTrigger">Rate details</button></div>
+        </div></div><div data-testid="rateTableHonorsCell"><div data-testid="honorsDiscountPrice">£519</div></div>'''
+    return html + "</div>"
+
+
+def parse_english(html=None, request=SEARCH, **kwargs):
+    options = dict(
+        rooms_url=ENGLISH_ROOMS_URL,
+        currency="GBP",
+        hotel_name=ENGLISH_HOTEL,
+        room_name=ENGLISH_ROOM,
+        room_code="K1D",
+    )
+    options.update(kwargs)
+    return parse_public_rates(html or english_rendered_page(), request, **options)
+
+
+def test_english_public_grid_keeps_all_six_plans_and_real_conditions():
+    rates = parse_english()
+    assert [r.cash_price for r in rates] == list(map(Decimal, ("595", "584", "546", "631", "619", "581")))
+    assert all(r.total_price is None for r in rates)
+    assert [r.rate_code for r in rates] == [
+        "public:LV0",
+        "public:R3X",
+        "public:PR09AP",
+        "public:PR09BB",
+        "public:B3F",
+        "public:CX09AP",
+    ]
+    assert [r.refundable for r in rates] == [True, True, False, True, True, False]
+    # The advance-purchase room-only plan does not explicitly state breakfast;
+    # preserve unknown rather than inventing a condition from its title.
+    assert [r.breakfast_included for r in rates] == [False, False, None, True, True, True]
+    assert all(r.member_rate is False and r.room_code == "K1D" for r in rates)
+    assert all(r.price_basis == "nightly" and r.currency == "GBP" for r in rates)
+    assert all(r.check_in == SEARCH.check_in and r.check_out == SEARCH.check_out for r in rates)
+    assert Decimal("519") not in [r.cash_price for r in rates]
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("October 21, 2026", "October 21, 2027"),
+        ("1 room for 2 adults", "1 room for 1 adult"),
+        ("Prices shown are average per night.", "Starting from"),
+        ("£546", "£546,50"),
+        ("PR09APInfoModalTrigger", "LV0InfoModalTrigger"),
+    ],
+)
+def test_english_mismatches_do_not_create_quotes(old, new):
+    with pytest.raises(ProviderError):
+        parse_english(english_rendered_page().replace(old, new))
+
+
+def test_english_singular_adult_label_is_matched_to_actual_request():
+    request = SEARCH.model_copy(update={"adults": 1})
+    assert "1 room for 1 adult" in stay_label_expectations(request)[1]
+    html = english_rendered_page().replace("1 room for 2 adults", "1 room for 1 adult")
+    rates = parse_english(
+        html, request, rooms_url=ENGLISH_ROOMS_URL.replace("room1NumAdults=2", "room1NumAdults=1")
+    )
+    assert all(r.adults == 1 for r in rates)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        ENGLISH_ROOMS_URL.replace("https:", "http:"),
+        ENGLISH_ROOMS_URL.replace("www.hilton.com", "other.example"),
+        ENGLISH_ROOMS_URL.replace("/rooms/", "/rates/"),
+        ENGLISH_ROOMS_URL + "&room2NumAdults=2",
+        ENGLISH_ROOMS_URL + "&room1NumChildren=1",
+    ],
+)
+def test_english_original_rooms_identity_and_occupancy_required(url):
+    with pytest.raises(ProviderError):
+        parse_english(rooms_url=url)
+
+
+@pytest.mark.parametrize("english", [False, True])
+def test_tax_excluded_display_amount_is_saved_without_an_invented_total(english):
+    rates = (
+        parse_english(
+            english_rendered_page().replace("Prices include taxes in British Pound", "Prices exclude taxes")
+        )
+        if english
+        else parse(rendered_page().replace("價格含稅", "價格未含稅"))
+    )
+    assert all(r.cash_price is not None and r.total_price is None for r in rates)

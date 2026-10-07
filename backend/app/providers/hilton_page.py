@@ -1,6 +1,6 @@
-"""Parse Hilton's rendered Traditional Chinese public rate grid, not list starting prices.
+"""Parse Hilton's rendered English/Traditional Chinese public rate grids, not list prices.
 
-Selectors and labels verified in ordinary Chrome on 2026-09-30. A valid rooms
+Selectors and labels verified in ordinary Chrome on 2026-09-30/2026-10-01. A valid rooms
 page must precede the rates page, whose URL no longer includes the stay identity.
 The browser adapter passes the verified rooms-page identity into this parser.
 """
@@ -15,6 +15,30 @@ from bs4 import BeautifulSoup
 from app.core.errors import ErrorCode, ProviderError
 from app.schemas.domain import RateData, RateRequest
 
+MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def stay_label_expectations(request: RateRequest) -> list[list[str]]:
+    days = (request.check_in, request.check_out)
+    return [
+        [f"{day.year}年{day.month}月{day.day}日" for day in days] + [f"1 間客房，{request.adults} 位成人"],
+        [f"{MONTHS[day.month - 1]} {day.day}, {day.year}" for day in days]
+        + [f"1 room for {request.adults} {'adult' if request.adults == 1 else 'adults'}"],
+    ]
+
 
 def verify_rooms_url(page_url: str, request: RateRequest) -> None:
     url = urlparse(page_url)
@@ -26,8 +50,9 @@ def verify_rooms_url(page_url: str, request: RateRequest) -> None:
         "room1NumAdults": str(request.adults),
     }
     if (
-        url.hostname != "www.hilton.com"
-        or url.path != "/zh-hant/book/reservation/rooms/"
+        url.scheme != "https"
+        or url.hostname != "www.hilton.com"
+        or url.path not in {"/zh-hant/book/reservation/rooms/", "/en/book/reservation/rooms/"}
         or any(params.get(key) != [value] for key, value in expected.items())
         or any(key.startswith("room2") for key in params)
         or params.get("room1NumChildren", ["0"]) != ["0"]
@@ -62,8 +87,9 @@ def parse_public_rates(
     ):
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton displayed hotel or room changed")
     text = soup.get_text(" ", strip=True)
-    if "所示價格為每晚平均價格。" not in text or "價格含稅" not in text:
-        raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton price basis or tax inclusion not confirmed")
+    nightly = "所示價格為每晚平均價格。" in text or "Prices shown are average per night." in text
+    if not nightly:
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton nightly price basis not confirmed")
     digest = hashlib.sha256(html.encode()).hexdigest()
     room_key = hashlib.sha256(room_name.encode()).hexdigest()[:24]
     rates = []
@@ -87,8 +113,20 @@ def parse_public_rates(
             )
         seen.add(code[1])
         terms = terms_node.get_text(" ", strip=True)
-        refundable = False if "不得取消" in terms else True if "前更改或取消" in terms else None
-        breakfast = True if "早餐" in terms else False if "僅客房" in terms else None
+        refundable = (
+            False
+            if "不得取消" in terms or "No cancellations." in terms
+            else True
+            if "前更改或取消" in terms or "Change or cancel by" in terms
+            else None
+        )
+        breakfast = (
+            True
+            if "早餐" in terms or "breakfast" in terms.lower()
+            else False
+            if "僅客房" in terms or "Room only." in terms
+            else None
+        )
         rates.append(
             RateData(
                 **request.model_dump(),
@@ -97,7 +135,10 @@ def parse_public_rates(
                 room_code=room_code or "name:" + room_key,
                 rate_name=title.get_text(" ", strip=True),
                 rate_code="public:" + code[1],
-                total_price=Decimal(amount[1].replace(",", "")),
+                # "Prices include taxes" does not prove that every mandatory
+                # resort/destination fee is included globally. Preserve the
+                # actual public display amount without inventing a final total.
+                cash_price=Decimal(amount[1].replace(",", "")),
                 currency=currency,
                 refundable=refundable,
                 breakfast_included=breakfast,
@@ -117,11 +158,8 @@ def verify_displayed_stay(html: str, request: RateRequest, expected_hotel: str |
     soup = BeautifulSoup(html, "html.parser")
     header = soup.select_one('[data-testid="search-edit-button"]')
     label = header.get("aria-label", "") if header else ""
-    for day in (request.check_in, request.check_out):
-        if f"{day.year}年{day.month}月{day.day}日" not in label:
-            raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton displayed stay dates do not match")
-    if f"1 間客房，{request.adults} 位成人" not in label:
-        raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton displayed guest count does not match")
+    if not any(all(value in label for value in expected) for expected in stay_label_expectations(request)):
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton displayed stay dates or guests do not match")
     hotel = soup.select_one('[data-testid="hotelName"]')
     name = hotel.get_text(" ", strip=True) if hotel else ""
     if not name or name not in label or (expected_hotel is not None and name != expected_hotel):

@@ -121,3 +121,48 @@ DBDB 双床房公开非会员价包括 USD 936、1016、1092/晚；没有点击 
 适配器现在忽略日期按钮大小写，等待税费切换后房卡重新渲染，再点击可见文字。
 同日独立普通 Chrome 采集会话，无论是否显式设置代理，首页仍返回 Access Denied。
 因此当前不能宣称万豪自动采价已通过，也不能将失败归因于用户无法访问官网。
+
+## 全球公开目录（本地未发布实现）
+
+2026-10-01 普通 Chrome 通过首页 Book → Hotel Locations 到达
+`https://www.marriott.com/hotel-search.mi`，页面 Property Directory 显示 10,423 Properties。
+逐一展开实际九个字母组 A-C、D-F、G-I、J-L、M-O、P-R、S-U、V-X、Y-Z，
+分别读到 398、283、187、210、302、175、312、124、29 个目的地链接，去重共 2,013 个。
+这是目的地数量，不是已经收录或查价的酒店数量；未尝试此前被浏览器工具拦截的 XML 地图。
+
+正常点击 A Coruña 目的地，实际 Showing 1-2 of 2 Hotels，主酒店卡片为 LCGCO
+AC Hotel A Coruna 和 SCQAK Hotel Palacio del Carmen, Autograph Collection。
+后者是邻近城市酒店，因此不把目的地标题当成酒店城市。目录卡片起价的可见日期
+与链接日期不一致，目录解析器只读取酒店身份，绝不产生价格记录或 Telegram 提醒。
+
+正常点击 Abu Dhabi，公开别名重定向至
+`/en-us/destinations/united-arab-emirates/abu-dhabi.mi`。
+第一页实际 Showing 1-12 of 14 Hotels；点击页面 Next，实际 `?pg=2` 显示 13-14 of 14，
+仅两个主酒店卡片 AUHWH（W Abu Dhabi - Yas Island）、AUHLC（Al Wathba, a Luxury
+Collection Desert Resort & Spa, Abu Dhabi）。最后一页 Next 已禁用，未猜测下一页地址。
+
+已加入 rendered public DOM 解析和持久化 Worker 目录任务：九组必须读完，主卡片数量
+必须与当前页范围相符，目的地与页码核对，后续仅沿已观察到的公开 Next 链接派发。
+HotelData 去重入库后参与一年日期轮询；跨目的地相同酒店不重复算全局数量。
+每页完整读取与全球完整覆盖分别记录，完整页面按正常目录周期再查，不因分页
+本身无法证明全球总量而每小时重复打开。
+
+独立普通窗口浏览器经已配置代理探测同一公开目录，本次主文档 HTTP 200，
+但标题和正文为 Access Denied，零可用控件。不能把 200 当成目录成功，也不能
+将本次响应写成 403。普通浏览器上述目录观察不代表自主 Worker、Linux/NAS 已完成。
+
+新增全局目录审计保存每页公开子链接和酒店代码，沿当前根目录可达图汇总，
+排除已脱离当前目录的旧页面，分页和城市重叠酒店按代码去重。失败、过期、
+缺少审计信息或读取不完整的页面都保留缺口。只有所有当前页面有效读取且去重酒店数
+与官网全球总数相同，才可标记 FULL_CATALOG_VERIFIED；该标记仍不代表全年报价完成。
+旧版成功记录缺少每页审计信息时只重新核对一次，不据旧累计 URL 推断全球成功。
+
+## 2026-10-05 持久目录低频复核（本地，未发布）
+
+距旧失败数日后，经原有代理、普通专用Chrome和生产Worker再次读取正常Hotel Locations
+入口，未访问此前被浏览器工具拦截的XML。任务6f4bd1c8-21dd-4a55-859e-cf0dc32419ed
+返回`FAILED / BLOCKED_BY_ANTIBOT / Marriott challenge page`，零酒店、零报价、零通知。
+错误文本未记录本次HTTP状态，不假定403。共享暂停至2026-10-05 08:29:16（Asia/Shanghai）。
+`audit_ihg_catalog.py --provider marriott`现保存目录游标、集团状态与失败到专用验收库
+`work/marriott-directory-audit-20261005/catalog-audit.sqlite`，下次不会创建新库重置冷却。
+没有复制普通用户会话、改变代理/通道或在暂停内重试。自动目录和报价仍未通过。

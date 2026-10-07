@@ -53,6 +53,10 @@ class CatalogPageData(BaseModel):
     hotels: list[HotelData] = Field(default_factory=list)
     reported_total: int | None = Field(default=None, ge=0)
     complete: bool
+    # A public directory may be correctly paginated without this individual
+    # page proving complete logical/global coverage. None keeps legacy semantics.
+    page_complete: bool | None = None
+    unparsed_hotel_links: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def identities(self) -> Self:

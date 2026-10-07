@@ -32,7 +32,7 @@ WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+RUN npm test && npm run build
 
 FROM nginx:1.28-alpine AS frontend
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

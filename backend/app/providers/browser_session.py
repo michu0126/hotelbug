@@ -1,17 +1,36 @@
 """Keep a dedicated official-site browser session across Worker jobs."""
 
 import asyncio
+import errno
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from playwright.async_api import Error as BrowserError
+from playwright.async_api import TimeoutError as BrowserTimeout
 from playwright.async_api import async_playwright
 
 from app.core.errors import ErrorCode, ProviderError
 
 _sessions = {}
 _locks = {}
+
+
+def startup_error(exc: Exception) -> ProviderError:
+    """Retry only known local transient failures, not missing/invalid installations."""
+    if isinstance(exc, (BrowserTimeout, TimeoutError)):
+        return ProviderError(ErrorCode.TIMEOUT, "Dedicated browser startup timed out")
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.EAGAIN,
+        errno.ENOMEM,
+        errno.EMFILE,
+        errno.ENFILE,
+    }:
+        return ProviderError(
+            ErrorCode.BROWSER_STARTUP_FAILED, "Dedicated browser startup temporarily lacked local resources"
+        )
+    return ProviderError(ErrorCode.BROWSER_UNAVAILABLE, "Dedicated browser session could not start")
 
 
 @dataclass
@@ -61,12 +80,21 @@ async def new_provider_page(
                 pass  # Already-disconnected contexts can reject close; the driver is still stopped.
             runtime = None
         if runtime is None:
-            playwright = await async_playwright().start()
-            options = {"headless": headless, "channel": browser_channel or "chromium"}
-            if proxy_server:
-                options["proxy"] = {"server": proxy_server}
-            browser = None
+            playwright = browser = context = None
             try:
+                playwright = await async_playwright().start()
+                options = {"headless": headless, "channel": browser_channel or "chromium"}
+                if proxy_server:
+                    parsed = urlsplit(proxy_server)
+                    host = parsed.hostname or ""
+                    if ":" in host:
+                        host = f"[{host}]"
+                    server = f"{parsed.scheme}://{host}" + (f":{parsed.port}" if parsed.port else "")
+                    options["proxy"] = {"server": server}
+                    if parsed.username is not None:
+                        options["proxy"]["username"] = unquote(parsed.username)
+                    if parsed.password is not None:
+                        options["proxy"]["password"] = unquote(parsed.password)
                 if session_dir:
                     suffix = hashlib.sha256(repr(identity).encode()).hexdigest()[:12]
                     profile = Path(session_dir) / f"{provider}-{suffix}"
@@ -82,15 +110,12 @@ async def new_provider_page(
                 _sessions[key] = runtime
             except BaseException as exc:
                 # A timed-out Worker task can cancel startup; do not orphan a browser/driver.
-                try:
-                    if browser:
-                        await browser.close()
-                finally:
-                    await playwright.stop()
+                # Cleanup failure must not hide the launch error or cancellation.
+                for resource, method in ((context, "close"), (browser, "close"), (playwright, "stop")):
+                    if resource is not None:
+                        await asyncio.gather(getattr(resource, method)(), return_exceptions=True)
                 if isinstance(exc, (BrowserError, OSError)):
-                    raise ProviderError(
-                        ErrorCode.BROWSER_UNAVAILABLE, "Dedicated browser session could not start"
-                    ) from exc
+                    raise startup_error(exc) from exc
                 raise
         return await runtime.context.new_page()
 

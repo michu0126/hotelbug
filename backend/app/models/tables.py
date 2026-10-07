@@ -140,6 +140,7 @@ class CrawlJob(Base):
     __tablename__ = "crawl_jobs"
     __table_args__ = (
         Index("ix_job_due", "status", "scheduled_at"),
+        Index("ix_job_stay_attempt", "hotel_id", "check_in", "check_out", "kind", "created_at"),
         Index(
             "uq_live_job",
             "dedupe_key",
@@ -172,6 +173,8 @@ class StayScan(Base):
     __table_args__ = (
         UniqueConstraint("hotel_id", "check_in", "check_out", "adults", "rooms"),
         Index("ix_stay_scans_hotel_date", "hotel_id", "check_in"),
+        Index("ix_stay_scans_recheck_cursor", "observed_at", "id"),
+        Index("ix_stay_scans_window", "check_in", "observed_at"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     hotel_id: Mapped[str] = mapped_column(ForeignKey("hotels.id"))

@@ -21,7 +21,7 @@ from app.core.errors import ErrorCode, ProviderError
 from app.providers.base import HotelProvider
 from app.providers.browser_session import new_provider_page
 from app.providers.marriott import hotel_code
-from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
+from app.schemas.domain import CatalogPageData, HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://www.marriott.com"
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -137,7 +137,7 @@ class MarriottBrowserProvider(HotelProvider):
         self,
         hotel_name: str | None = None,
         browser_channel: str | None = None,
-        headless: bool = True,
+        headless: bool = False,
         proxy_server: str | None = None,
         session_dir: str | None = None,
     ):
@@ -209,6 +209,70 @@ class MarriottBrowserProvider(HotelProvider):
         await self._check_access(page, None)
         parse_hotel_page(await page.content(), code)
         return page
+
+    async def discover_catalog(self, query: dict) -> CatalogPageData:
+        from app.providers.marriott_catalog import (
+            BUCKETS,
+            directory_url,
+            parse_catalog,
+            verify_directory_redirect,
+        )
+        from app.providers.marriott_catalog import ROOT as DIRECTORY_ROOT
+
+        url = directory_url(query.get("official_url", ""))
+        try:
+            page = await self._get_page()
+            response = await page.goto(url, wait_until="commit", timeout=45000)
+            await self._check_access(page, response.status if response else None)
+            links = []
+            visited = []
+            if url == DIRECTORY_ROOT:
+                await page.get_by_role("heading", name="Property Directory", exact=True).wait_for(
+                    state="visible", timeout=45000
+                )
+                for name in BUCKETS:
+                    button = page.get_by_role("button", name=name, exact=True)
+                    if await button.get_attribute("aria-expanded") != "true":
+                        await button.click()
+                    await page.wait_for_function(
+                        "name => { const b = [...document.querySelectorAll('button[aria-label]')]"
+                        ".find(e => e.getAttribute('aria-label') === name);"
+                        "return b?.getAttribute('aria-expanded') === 'true' && "
+                        "b.parentElement.querySelector('a.destination-item-content-link[href]'); }",
+                        arg=name,
+                        timeout=15000,
+                    )
+                    links.extend(
+                        await button.evaluate(
+                            "e => [...e.parentElement.querySelectorAll('a.destination-item-content-link[href]')]"
+                            ".map(a => a.getAttribute('href'))"
+                        )
+                    )
+                    visited.append(name)
+            else:
+                await page.locator("h2.property-card__title a[href]").first.wait_for(
+                    state="visible", timeout=45000
+                )
+                await page.wait_for_function(
+                    "() => [...document.querySelectorAll('p')].some(p => /^Showing [0-9,]+-[0-9,]+ of [0-9,]+ Hotels$/.test(p.textContent.trim()))",
+                    timeout=30000,
+                )
+            await self._check_access(page, None)
+            verify_directory_redirect(url, page.url)
+            return parse_catalog(
+                await page.content(),
+                url,
+                final_url=page.url,
+                root_links=links if url == DIRECTORY_ROOT else None,
+                visited_buckets=tuple(visited),
+            )
+        except PlaywrightError as exc:
+            if self._page and not self._page.is_closed():
+                await self._check_access(self._page, None)
+            raise ProviderError(
+                ErrorCode.TIMEOUT if isinstance(exc, PlaywrightTimeout) else ErrorCode.NETWORK_ERROR,
+                "Marriott public directory page failed",
+            ) from exc
 
     async def _choose_day(self, page: Page, day: date) -> None:
         cell = page.get_by_role("gridcell", name=day_label(day))

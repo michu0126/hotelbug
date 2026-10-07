@@ -9,12 +9,19 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 
 from app.core.errors import ErrorCode, ProviderError
 from app.providers.accor_browser import AccorBrowserProvider
-from app.providers.hilton_page import parse_public_rates, verify_displayed_stay, verify_rooms_url
+from app.providers.hilton_page import (
+    MONTHS,
+    parse_public_rates,
+    stay_label_expectations,
+    verify_displayed_stay,
+    verify_rooms_url,
+)
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://www.hilton.com"
 ROOM_BUTTONS = '[data-testid="moreRatesButton"], [data-testid="accessibleMoreRatesButton"]'
 PROPERTY_PATH = re.compile(r"/en/hotels/([a-z0-9]{7})-[a-z0-9-]+/?")
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
 def hotel_code(value: str) -> str:
@@ -41,18 +48,129 @@ def rooms_url(request: RateRequest) -> str:
 class HiltonBrowserProvider(AccorBrowserProvider):
     session_provider = "hilton"
 
+    def __init__(self, *args, headless: bool = False, **kwargs):
+        super().__init__(*args, headless=headless, **kwargs)
+        self.hotel_name = None
+        self._journey_pages = []
+        self._booking_stage = None
+
+    def configure_hotel(self, name: str):
+        self.hotel_name = name.strip()
+
+    async def _install_cookie_handler(self, page):
+        async def dismiss_cookie(locator):
+            await locator.click()
+
+        await page.add_locator_handler(
+            page.get_by_role("button", name="dismiss cookie message", exact=True), dismiss_cookie
+        )
+
     async def _get_page(self):
         created = self._page is None
         page = await super()._get_page()
         if created:
-
-            async def dismiss_cookie(locator):
-                await locator.click()
-
-            await page.add_locator_handler(
-                page.get_by_role("button", name="dismiss cookie message", exact=True), dismiss_cookie
-            )
+            await self._install_cookie_handler(page)
         return page
+
+    async def _choose_day(self, page, value: date, phase: str):
+        label = re.compile(
+            rf"^Choose {WEEKDAYS[value.weekday()]}, {MONTHS[value.month - 1]} {value.day}, "
+            rf"{value.year} as your Check-{phase} date\.$",
+            re.I,
+        )
+        day = page.get_by_role("button", name=label)
+        # The official calendar shows two months. A year's dates require at
+        # most twelve forward steps, not a guessed URL/date payload.
+        for _ in range(13):
+            if await day.count():
+                await day.click()
+                return
+            await page.get_by_role("button", name="Next Month", exact=True).click()
+        raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton date not exposed by calendar")
+
+    async def _set_adults(self, page, adults: int):
+        await page.get_by_role("button", name=re.compile("Modify/Change Rooms & Guests")).click()
+        dialog = page.get_by_role("dialog")
+        add = dialog.get_by_role("button", name="Add adult to room 1", exact=True)
+        await add.wait_for(state="visible", timeout=30000)
+
+        # Count is rendered between the normal plus/minus buttons. Do not
+        # assume the homepage always defaults to one adult in a saved session.
+        async def count():
+            value = await add.evaluate(
+                "e => e.parentElement.querySelector('[aria-live=polite]')?.textContent.trim()"
+            )
+            match = re.fullmatch(r"([1-8]) adults?", value or "")
+            if not match:
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Hilton adult count is not readable")
+            return int(match[1])
+
+        current = await count()
+        while current != adults:
+            button = (
+                add
+                if current < adults
+                else dialog.get_by_role("button", name="Remove adult from room 1", exact=True)
+            )
+            await button.click()
+            next_count = await count()
+            if next_count != current + (1 if current < adults else -1):
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton adult count did not update")
+            current = next_count
+        await dialog.get_by_role("button", name="Done", exact=True).click()
+
+    async def _open_via_home(self, page, request: RateRequest):
+        self._booking_stage = "home navigation"
+        response = await page.goto(ROOT + "/en/", wait_until="commit", timeout=45000)
+        await self._check_access(page, response.status if response else None)
+        search = page.locator("#location-input")
+        try:
+            self._booking_stage = "hotel search input"
+            await search.wait_for(state="visible", timeout=45000)
+            await search.fill(self.hotel_name)
+            self._booking_stage = "hotel suggestion"
+            exact_hotel = page.get_by_role("option").filter(
+                has_text=re.compile(r"^" + re.escape(self.hotel_name) + r"(?:\s|$)")
+            )
+            await exact_hotel.first.wait_for(state="visible", timeout=45000)
+            if await exact_hotel.count() != 1:
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton hotel suggestion is ambiguous")
+            await exact_hotel.click()
+            self._booking_stage = "stay date controls"
+            await page.get_by_role("button", name=re.compile("^Check-in.*Check-out")).click()
+            await self._choose_day(page, request.check_in, "in")
+            await self._choose_day(page, request.check_out, "out")
+            await page.get_by_role("dialog").get_by_role("button", name="Done", exact=True).click()
+            self._booking_stage = "guest controls"
+            await self._set_adults(page, request.adults)
+            self._booking_stage = "search submission"
+            async with page.expect_popup(timeout=45000) as found:
+                await page.get_by_test_id("search-submit-button").click()
+            results = await found.value
+            self._journey_pages.append(results)
+            await self._install_cookie_handler(results)
+            await results.wait_for_load_state("domcontentloaded", timeout=45000)
+            await self._check_access(results)
+            final = urlparse(results.url)
+            if final.scheme != "https" or final.hostname != "www.hilton.com" or final.path != "/en/search/":
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hilton search result URL changed")
+            self._booking_stage = "target hotel result"
+            card = results.get_by_test_id("hotel-card-" + hotel_code(request.provider_hotel_id))
+            await card.wait_for(state="visible", timeout=45000)
+            self._booking_stage = "target hotel rates navigation"
+            async with results.expect_popup(timeout=45000) as rooms:
+                await card.get_by_role("link", name=re.compile("^View Rates")).click()
+            room_page = await rooms.value
+            self._journey_pages.append(room_page)
+            await self._install_cookie_handler(room_page)
+            await room_page.wait_for_load_state("domcontentloaded", timeout=45000)
+            await self._check_access(room_page)
+            verify_rooms_url(room_page.url, request)
+            self._page = room_page
+            return room_page
+        except BrowserTimeout:
+            await self._check_access(page)
+            raise
 
     async def _check_access(self, page, status=None):
         if status == 403:
@@ -66,17 +184,23 @@ class HiltonBrowserProvider(AccorBrowserProvider):
 
     async def _open_rooms(self, request: RateRequest):
         page = await self._get_page()
-        response = await page.goto(rooms_url(request), wait_until="domcontentloaded", timeout=45000)
-        await self._check_access(page, response.status if response else None)
+        if self.hotel_name:
+            self._journey_pages.append(page)
+            page = await self._open_via_home(page, request)
+        else:
+            # Code-only diagnostic calls retain the verified public deeplink;
+            # real catalog-backed rate jobs have the official hotel name.
+            response = await page.goto(rooms_url(request), wait_until="domcontentloaded", timeout=45000)
+            await self._check_access(page, response.status if response else None)
         try:
+            self._booking_stage = "rooms summary"
             await page.get_by_test_id("search-edit-button").wait_for(state="attached", timeout=30000)
             # The summary button can be attached while its hotel/date data is still loading.
             await page.wait_for_function(
                 "expected => { const label = document.querySelector('[data-testid=search-edit-button]')?.getAttribute('aria-label') || '';"
                 "const name = document.querySelector('[data-testid=hotelName]')?.textContent.trim();"
-                "return name && label.includes(name) && expected.every(value => label.includes(value)); }",
-                arg=[f"{day.year}年{day.month}月{day.day}日" for day in (request.check_in, request.check_out)]
-                + [f"1 間客房，{request.adults} 位成人"],
+                "return name && label.includes(name) && expected.some(group => group.every(value => label.includes(value))); }",
+                arg=stay_label_expectations(request),
                 timeout=30000,
             )
         except BrowserTimeout:
@@ -147,8 +271,10 @@ class HiltonBrowserProvider(AccorBrowserProvider):
         if request.rooms != 1 or (request.check_out - request.check_in).days != 1:
             raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Hilton page adapter supports one room, one night")
         stage = "rooms page"
+        self._booking_stage = None
         try:
             page, name = await self._open_rooms(request)
+            self._booking_stage = None
             stage = "available room cards"
             await page.locator(ROOM_BUTTONS).first.wait_for(state="visible", timeout=30000)
             verified_url = page.url
@@ -180,7 +306,7 @@ class HiltonBrowserProvider(AccorBrowserProvider):
                     '[data-testid="rateTableStandardCell"] [data-testid="ratePrice"] p'
                 ).first.wait_for(state="visible", timeout=45000)
                 await self._check_access(page)
-                currency = await page.get_by_role("combobox", name="選擇貨幣", exact=True).input_value()
+                currency = await page.locator("#selectCurrencyConverter").input_value()
                 rates.extend(
                     parse_public_rates(
                         await page.content(),
@@ -208,7 +334,7 @@ class HiltonBrowserProvider(AccorBrowserProvider):
                     pass  # Failed diagnostics must not replace the original network/timeout cause.
             raise ProviderError(
                 ErrorCode.TIMEOUT if isinstance(exc, BrowserTimeout) else ErrorCode.NETWORK_ERROR,
-                f"Hilton booking page failed at {stage}",
+                f"Hilton booking page failed at {self._booking_stage or stage}",
             ) from exc
 
     async def get_calendar_rates(self, request: RateRequest) -> list[RateData]:
@@ -216,7 +342,17 @@ class HiltonBrowserProvider(AccorBrowserProvider):
 
     async def health_check(self) -> HealthResult:
         day = date.today() + timedelta(days=10)
+        self.configure_hotel("Conrad London St. James")
         rates = await self.search_rates(
             RateRequest(provider_hotel_id="LONCOCI", check_in=day, check_out=day + timedelta(days=1))
         )
         return HealthResult(status="ONLINE" if rates else "DEGRADED", message="Hilton rendered public rates")
+
+    async def close(self):
+        try:
+            for page in self._journey_pages:
+                if page is not self._page and not page.is_closed():
+                    await page.close()
+        finally:
+            self._journey_pages.clear()
+            await super().close()

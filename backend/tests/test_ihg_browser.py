@@ -4,6 +4,7 @@ from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from playwright.async_api import TimeoutError as BrowserTimeout
 from sqlalchemy import func, select
 from test_ihg_page import HOTEL, SEARCH, URL, room_html, window_html
 
@@ -48,6 +49,7 @@ class RenderedPage:
         if selector.startswith("#ROOM_CODE"):
             code = selector.removeprefix("#ROOM_CODE")
             locator.get_by_role.return_value.click = AsyncMock(side_effect=lambda: self.expanded.append(code))
+            locator.get_by_role.return_value.count = AsyncMock(return_value=1)
             locator.locator.return_value.wait_for = AsyncMock()
             locator.locator.return_value.set_checked = AsyncMock(
                 side_effect=lambda checked: self.public.append((code, checked))
@@ -106,6 +108,42 @@ async def test_expands_every_room_and_waits_for_public_cards(monkeypatch):
         SEARCH.check_in,
         SEARCH.check_out,
     ]
+
+
+@pytest.mark.parametrize("missing_cards", [False, True])
+async def test_inline_plan_path_never_waits_for_expand_or_clicks_select(monkeypatch, missing_cards):
+    provider, page, _ = provider_with_page(monkeypatch)
+    original_locator = page.locator
+    expand_controls = []
+    card_waits = []
+
+    def locator(selector):
+        control = original_locator(selector)
+        if selector.startswith("#ROOM_CODE"):
+            expand = control.get_by_role.return_value
+            expand.count = AsyncMock(return_value=0)
+            expand_controls.append(expand)
+            wait = control.get_by_test_id.return_value.first.wait_for
+            if missing_cards:
+                wait.side_effect = BrowserTimeout("Offline missing inline cards")
+            card_waits.append(wait)
+        return control
+
+    page.locator = locator
+    if missing_cards:
+        with pytest.raises(ProviderError) as raised:
+            await provider.search_rates(SEARCH)
+        assert raised.value.code == ErrorCode.TIMEOUT
+        assert str(raised.value) == "IHG booking page failed at expand room plans"
+        assert not page.public
+    else:
+        rates = await provider.search_rates(SEARCH)
+        assert len(rates) == 12 and {rate.room_code for rate in rates} == {"OAAN", "OQNN"}
+        assert page.public == [("OAAN", False), ("OQNN", False)]
+        assert all(wait.await_count == 2 for wait in card_waits)
+    assert not page.expanded
+    assert all(control.click.await_count == 0 for control in expand_controls)
+    assert "select-btn" not in page.clicked_controls
 
 
 async def test_actual_403_is_a_failed_lookup_not_no_rooms():

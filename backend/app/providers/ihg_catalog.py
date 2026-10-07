@@ -37,12 +37,37 @@ def directory_url(url: str) -> str:
     return parsed.geturl().rstrip("/")
 
 
+def verify_directory_source(requested: str, actual: str) -> None:
+    requested, actual = directory_url(requested), directory_url(actual)
+    if actual == requested:
+        return
+    if requested != ROOT and actual == ROOT:
+        # Observed New Caledonia -> worldwide explore fallback. This is not
+        # evidence of zero local hotels or permission to attribute global cards.
+        raise ProviderError(
+            ErrorCode.DIRECTORY_REDIRECT,
+            "IHG directory redirects to worldwide explore page; regional coverage unconfirmed",
+        )
+    raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG directory redirected unexpectedly")
+
+
+def directory_render_pending(html: str) -> bool:
+    """Wait only for a present public counter/list, not omitted city counters."""
+    soup = BeautifulSoup(html, "html.parser")
+    counter = soup.select_one('[data-render-hotel-count="true"] #cmp-card__title-bar-count')
+    if counter is None:
+        return False
+    text = counter.get_text(strip=True).replace(",", "")
+    return not text.isdigit() or len(soup.select("h4 a[href]")) < int(text)
+
+
 def parse_catalog(html: str, url: str) -> CatalogPageData:
     url = directory_url(url)
     soup = BeautifulSoup(html, "html.parser")
     directories = set()
     hotels = {}
     reported = None
+    unparsed = 0
     if url == ROOT:
         found = set()
         blocks = []
@@ -120,6 +145,7 @@ def parse_catalog(html: str, url: str) -> CatalogPageData:
         if not links and reported != 0:
             raise ProviderError(ErrorCode.PROVIDER_CHANGED, "IHG directory hotel links not loaded")
         complete = reported is not None and observed == len(links) == len(hotels) == reported
+        unparsed = len(links) - observed
         blocks = soup.select(".explorelist")
     for block in blocks:
         for link in block.select("a[href]"):
@@ -139,5 +165,6 @@ def parse_catalog(html: str, url: str) -> CatalogPageData:
         directory_urls=sorted(directories),
         hotels=list(hotels.values()),
         reported_total=reported,
+        unparsed_hotel_links=unparsed,
         complete=complete,
     )
