@@ -70,12 +70,15 @@ async def test_future_deferred_expired_jobs_release_global_capacity_even_while_g
         rows = (await db.scalars(select(CrawlJob).where(CrawlJob.id.in_(old_ids)))).all()
         assert all(job.status == "CANCELLED" for job in rows)
         assert all(job.error_type == "TIMEOUT" and job.retry_count == 2 for job in rows)
-        assert all(job.scheduled_at == paused_until.replace(tzinfo=None) for job in rows)
+        assert all(job.scheduled_at.replace(tzinfo=paused_until.tzinfo) == paused_until for job in rows)
         assert all("Original public query timeout" in job.error_message for job in rows)
         new = (await db.scalars(select(CrawlJob).where(CrawlJob.hotel_id == healthy_id))).all()
         assert len(new) == 1 and new[0].status == "PENDING" and new[0].check_in == date.today()
         state = await db.get(ProviderStatus, "ihg")
-        assert state.status == "BLOCKED" and state.blocked_until == paused_until.replace(tzinfo=None)
+        assert (
+            state.status == "BLOCKED"
+            and state.blocked_until.replace(tzinfo=paused_until.tzinfo) == paused_until
+        )
 
 
 def legacy_job(**changes):

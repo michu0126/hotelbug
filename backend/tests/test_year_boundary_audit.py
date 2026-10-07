@@ -64,7 +64,7 @@ async def test_boundary_resume_never_shortens_retry(sessions, queue, monkeypatch
     execute.assert_not_awaited()
     async with sessions() as db:
         target = await db.get(CrawlJob, first["job_id"])
-        assert target.scheduled_at == deadline.replace(tzinfo=None) and target.retry_count == 1
+        assert target.scheduled_at.replace(tzinfo=deadline.tzinfo) == deadline and target.retry_count == 1
 
 
 @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "CANCELLED", "RUNNING"])

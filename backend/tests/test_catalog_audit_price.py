@@ -111,7 +111,9 @@ async def test_default_price_audit_skips_new_job_for_observed_stay_without_chang
     assert skipped["outcome"] == "NO_PENDING_PRICE_DUE" and execute.await_count == 1
     async with sessions() as db:
         waiting = await db.get(CrawlJob, monitoring_id)
-        assert waiting.status == "PENDING" and waiting.scheduled_at == deadline.replace(tzinfo=None)
+        assert (
+            waiting.status == "PENDING" and waiting.scheduled_at.replace(tzinfo=deadline.tzinfo) == deadline
+        )
     allowed = await run_existing_price(sessions, queue, settings, emit=lambda _: None, allow_due_recheck=True)
     assert allowed["outcome"] == "SUCCEEDED" and execute.await_count == 2
 
@@ -275,7 +277,7 @@ async def test_room_fix_retest_preserves_failure_deadline_and_only_creates_one_a
         original = await db.get(CrawlJob, original_id)
         child = await db.get(CrawlJob, child_id)
         assert original.status == "FAILED"
-        assert child.scheduled_at == deadline.replace(tzinfo=None)
+        assert child.scheduled_at.replace(tzinfo=deadline.tzinfo) == deadline
         assert child.dedupe_key == original.dedupe_key and child.payload == original.payload
         child.status = "FAILED"
     with pytest.raises(AssertionError, match="already finished"):

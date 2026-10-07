@@ -171,7 +171,7 @@ async def test_fix_retest_preserves_original_failure_and_future_deadline(session
     async with sessions() as db, db.begin():
         original, child = await db.get(CrawlJob, original_id), await db.get(CrawlJob, child_id)
         assert original.status == "FAILED" and original.error_type == "TIMEOUT"
-        assert child.scheduled_at == deadline.replace(tzinfo=None)
+        assert child.scheduled_at.replace(tzinfo=deadline.tzinfo) == deadline
         child.status = "FAILED"
     with pytest.raises(AssertionError, match="already finished"):
         await requeue_fixed_room_job(sessions, "ihg", original_id, no_room=True)

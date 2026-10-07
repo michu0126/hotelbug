@@ -2,7 +2,7 @@
 
 from datetime import date, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 
 from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, StayScan, utcnow
 from app.schemas.domain import JobInput, JobKind
@@ -49,7 +49,7 @@ async def prepare_year_boundary(sessions, settings, provider):
                 CrawlJob.check_out > CrawlJob.check_in,
                 CrawlJob.check_out <= check_out,
                 CrawlJob.priority.in_((40, 60, 80)),
-                CrawlJob.payload == {},
+                cast(CrawlJob.payload, String) == "{}",
                 Hotel.provider == provider,
                 Hotel.active.is_(True),
             )
