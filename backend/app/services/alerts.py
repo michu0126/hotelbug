@@ -2,7 +2,7 @@
 
 import hashlib
 from collections import defaultdict
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from statistics import median
 
@@ -22,6 +22,7 @@ from app.models.tables import (
 )
 from app.schemas.domain import JobInput, JobKind, RateData
 from app.services.anomaly import anomaly_score, calendar_features, comparison_percentages, text_amount
+from app.services.catalog_price_source import load_catalog_price_source
 from app.services.jobs import LIVE, enqueue, outside_window_cancellation
 from app.services.offer_policy import classify_offer
 from app.services.pricing import displayed_price, price_field
@@ -331,6 +332,33 @@ async def confirm_drop(session: AsyncSession, alert_id: str, job_id: str, rates:
     payload = dict(alert.payload)
     amount = displayed_price(match) if match is not None else None
     classification = classify_offer(match) if match is not None else None
+    if alert.event_type == "CALENDAR_PRICE_DROP":
+        source = await load_catalog_price_source(session)
+        current_hotel = await session.get(Hotel, alert.hotel_id, populate_existing=True)
+        try:
+            first_capture = datetime.fromisoformat(payload["first_room_captured_at"])
+            valid_signal_quote = (
+                source.root == payload.get("source_root")
+                and current_hotel is not None
+                and current_hotel.active
+                and current_hotel.provider == "marriott"
+                and current_hotel.official_url.startswith("https://www.marriott.com.cn/")
+                and match is not None
+                and match.provider_hotel_id == current_hotel.provider_hotel_id
+                and match.member_rate is False
+                and match.total_price is not None
+                and str(match.source_url).startswith("https://www.marriott.com.cn/")
+                and match.captured_at > first_capture
+            )
+        except (KeyError, ValueError, TypeError):
+            valid_signal_quote = False
+        if not valid_signal_quote:
+            alert.payload = {
+                **payload,
+                "verification": "REJECTED",
+                "verification_reason": "CALENDAR_CONFIRMATION_SOURCE_OR_TIME",
+            }
+            return False
     if (
         match is None
         or not match.availability

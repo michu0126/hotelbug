@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import Hotel, PriceHistory, Rate, StayScan
+from app.services.calendar_hint_views import attach_hint_days, hotel_hint_days
 from app.services.offer_policy import classify_offer
 from app.services.pricing import displayed_price, price_field
 
@@ -116,6 +117,7 @@ def calendar_rows(
 
 async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
     start, end = month_bounds(month)
+    hints = await hotel_hint_days(session, hotel, start, end)
     scans = (
         await session.scalars(
             select(StayScan).where(
@@ -155,7 +157,7 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
         )
     }
     if not keys:
-        return calendar_rows(hotel, month, current, [], scans=scans)
+        return attach_hint_days(calendar_rows(hotel, month, current, [], scans=scans), hints)
     lows = dict(
         (
             await session.execute(
@@ -183,4 +185,4 @@ async def get_calendar(session: AsyncSession, hotel: Hotel, month: str) -> dict:
             )
         )
     ).all()
-    return calendar_rows(hotel, month, current, history, lows, scans)
+    return attach_hint_days(calendar_rows(hotel, month, current, history, lows, scans), hints)

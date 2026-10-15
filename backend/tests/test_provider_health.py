@@ -118,6 +118,7 @@ async def test_flags_or_unverified_stale_data_do_not_replace_real_price_evidence
 )
 async def test_existing_live_or_recent_probe_prevents_hourly_duplicate(sessions, status, age, due):
     async with sessions() as session, session.begin():
+        await upsert_hotel(session, await FixtureProvider().get_hotel_details("fixture-only"))
         job = await enqueue(session, JobInput(provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK))
         job.status = status
         job.created_at = utcnow() - timedelta(hours=age)
@@ -200,7 +201,7 @@ async def test_automatic_probe_still_runs_without_current_healthy_evidence(
     monkeypatch.setenv("MARRIOTT_ENABLED", "true")
     monkeypatch.setitem(FACTORIES, "marriott", FixtureProvider)
     async with sessions() as session, session.begin():
-        _, scan, state = await successful_scan(session)
+        price_job, scan, state = await successful_scan(session)
         if condition == "stale":
             scan.observed_at = utcnow() - timedelta(hours=2)
         else:
@@ -208,7 +209,10 @@ async def test_automatic_probe_still_runs_without_current_healthy_evidence(
         job = await enqueue(
             session,
             JobInput(
-                provider="marriott", kind=JobKind.PROVIDER_HEALTHCHECK, payload={"scheduled_probe": True}
+                provider="marriott",
+                kind=JobKind.PROVIDER_HEALTHCHECK,
+                hotel_id=price_job.hotel_id,
+                payload={"scheduled_probe": True},
             ),
         )
         job_id = job.id

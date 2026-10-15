@@ -18,7 +18,7 @@ class Queue:
     def __init__(self, redis: Redis):
         self.redis = redis
 
-    async def put(self, job_id: str, priority: int) -> None:
+    async def put(self, job_id: str, priority: int | float) -> None:
         await self.redis.zadd(READY, {job_id: -priority})
 
     async def pop(self) -> str | None:

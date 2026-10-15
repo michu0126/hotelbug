@@ -7,7 +7,7 @@ from sqlalchemy import case, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.tables import CrawlJob, utcnow
+from app.models.tables import AppSetting, CrawlJob, utcnow
 from app.schemas.domain import JobInput, JobKind
 
 LIVE = ("PENDING", "QUEUED", "RUNNING")
@@ -27,6 +27,7 @@ def dispatch_priority(now):
                 (
                     JobKind.FETCH_RATE,
                     JobKind.FETCH_CALENDAR,
+                    JobKind.FETCH_CALENDAR_HINTS,
                     JobKind.DISCOVER_HOTELS,
                     JobKind.DISCOVER_CATALOG,
                 )
@@ -39,11 +40,48 @@ def dispatch_priority(now):
     )
 
 
+async def fair_group_head(session: AsyncSession, query, provider, selected):
+    """Pin one fair head until claimed; alternate discovery and ordinary work.
+
+    Rotating on every tick can still starve a lane when a slow Worker always
+    pops at the same phase. SQL keeps the head stable across Redis loss/restarts
+    until it runs, completes, or is no longer due. Original priorities remain.
+    """
+    query = query.where(CrawlJob.provider == provider, CrawlJob.id.not_in(selected))
+    key = "dispatch_head:" + provider
+    cursor = await session.get(AppSetting, key)
+    value = cursor.value if cursor and isinstance(cursor.value, dict) else {}
+    pinned_id = value.get("job_id")
+    if isinstance(pinned_id, str):
+        pinned = (await session.execute(query.where(CrawlJob.id == pinned_id).limit(1))).first()
+        if pinned:
+            return pinned
+    catalogs = (JobKind.DISCOVER_CATALOG, JobKind.DISCOVER_HOTELS)
+    lane = value.get("lane")
+    preferred = (
+        query.where(CrawlJob.kind.not_in(catalogs))
+        if lane == "catalog"
+        else query.where(CrawlJob.kind.in_(catalogs))
+        if lane == "ordinary"
+        else None
+    )
+    row = (await session.execute(preferred.limit(1))).first() if preferred is not None else None
+    if row is None:
+        row = (await session.execute(query.limit(1))).first()
+    if row:
+        next_value = {"job_id": row[0].id, "lane": "catalog" if row[0].kind in catalogs else "ordinary"}
+        if cursor:
+            cursor.value = next_value
+        else:
+            session.add(AppSetting(key=key, value=next_value))
+    return row
+
+
 async def due_dispatch_jobs(session: AsyncSession, now, providers, limit: int = 100):
     """Replay a bounded due batch without hiding small groups behind a big queue.
 
-    Confirmations keep their highest-priority lane. Then reserve one best due
-    job per known group and fill all remaining capacity by the usual priority
+    Confirmations keep their highest-priority lane. Then reserve one pinned
+    fair head per known group and fill remaining capacity by the usual priority
     and age order. Effective Redis priorities/original job priorities stay intact.
     Each read locks only selected jobs and skips an active Worker's row locks.
     """
@@ -61,11 +99,7 @@ async def due_dispatch_jobs(session: AsyncSession, now, providers, limit: int = 
     for provider in sorted(set(providers)):
         if len(rows) >= limit:
             break
-        reserved = (
-            await session.execute(
-                query.where(CrawlJob.provider == provider, CrawlJob.id.not_in(selected)).limit(1)
-            )
-        ).first()
+        reserved = await fair_group_head(session, query, provider, selected)
         if reserved:
             rows.append(reserved)
             selected.add(reserved[0].id)
@@ -74,6 +108,39 @@ async def due_dispatch_jobs(session: AsyncSession, now, providers, limit: int = 
             (await session.execute(query.where(CrawlJob.id.not_in(selected)).limit(limit - len(rows)))).all()
         )
     return rows
+
+
+async def reserve_provider_turn(session: AsyncSession, rows) -> str | None:
+    """Pin one eligible group head until claimed, then advance to the next group.
+
+    Equal Redis scores are ordered by job ID, not insertion time. Replenishing
+    the earliest-sorting group on each fast Scheduler tick can therefore starve
+    the other pinned heads when a slow Worker claims only one job per tick.
+    The caller supplies only currently eligible jobs; confirmations retain their
+    separate priority and do not advance the ordinary-work turn.
+    """
+    heads = {}
+    for job, priority in rows:
+        if priority < 100:
+            heads.setdefault(job.provider, job.id)
+    if not heads:
+        return None
+    cursor = await session.get(AppSetting, "dispatch_provider_turn")
+    value = cursor.value if cursor and isinstance(cursor.value, dict) else {}
+    previous = value.get("provider", "")
+    if not isinstance(previous, str):
+        previous = ""
+    pinned_id = value.get("job_id")
+    if isinstance(pinned_id, str) and heads.get(previous) == pinned_id:
+        return pinned_id
+    providers = sorted(heads)
+    provider = next((name for name in providers if name > previous), providers[0])
+    value = {"provider": provider, "job_id": heads[provider]}
+    if cursor:
+        cursor.value = value
+    else:
+        session.add(AppSetting(key="dispatch_provider_turn", value=value))
+    return heads[provider]
 
 
 def within_monitoring_window(check_in: date | None, check_out: date | None) -> bool:
@@ -125,10 +192,44 @@ async def expire_pending_stays(session: AsyncSession, limit: int = 100) -> int:
     ).all()
     for job in rows:
         cancel_outside_window(job)
-    return len(rows)
+    if len(rows) == limit:
+        return len(rows)
+    # Month tasks deliberately have no single check-in date. Retire expired
+    # or malformed months even when their provider pause is still in future.
+    from app.schemas.calendar_hints import SHANGHAI
+
+    local_day = utcnow().astimezone(SHANGHAI).date()
+    month = local_day.replace(day=1)
+    last_day = local_day + timedelta(days=364)
+    months = []
+    while month <= last_day:
+        months.append(month.strftime("%Y-%m"))
+        month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    task_month = CrawlJob.payload["month"].as_string()
+    hint_rows = (
+        await session.scalars(
+            select(CrawlJob)
+            .where(
+                CrawlJob.status.in_(("PENDING", "QUEUED")),
+                CrawlJob.kind == JobKind.FETCH_CALENDAR_HINTS,
+                or_(task_month.is_(None), task_month.not_in(months)),
+            )
+            .order_by(CrawlJob.created_at, CrawlJob.id)
+            .limit(limit - len(rows))
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    for job in hint_rows:
+        cancel_outside_window(job)
+    return len(rows) + len(hint_rows)
 
 
 async def enqueue(session: AsyncSession, job: JobInput, delay_seconds: float = 0) -> CrawlJob:
+    if job.kind == JobKind.FETCH_CALENDAR_HINTS:
+        from app.schemas.calendar_hints import month_window
+
+        if month_window(job.payload.get("month")) is None:
+            raise ValueError("Calendar month must overlap the next 365 days")
     if job.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
         if not within_monitoring_window(job.check_in, job.check_out):
             raise ValueError("Stay must be within the next 365 days")

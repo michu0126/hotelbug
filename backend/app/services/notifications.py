@@ -36,13 +36,18 @@ def telegram_text(payload: dict) -> str:
         if payload.get("anomaly_level")
         else ""
     )
+    baseline_label = (
+        "历史日历起价基准（税费及会员资格未确认；当前为已复查公开含税房型价）"
+        if payload.get("baseline_kind") == "CALENDAR_MINIMUM_DAILY_MEDIAN"
+        else "历史基准"
+    )
     return (
         f"{title}（已复查）\n"
         f"酒店：{payload['hotel_name']}\n"
         f"集团：{GROUP_NAMES.get(payload['provider'], payload['provider'])}\n"
         f"入住：{payload['check_in']}\n退房：{payload['check_out']}\n"
         f"价格：{payload['price']} {payload['currency']}（{basis}）\n"
-        f"历史基准：{payload['baseline']} {payload['currency']}"
+        f"{baseline_label}：{payload['baseline']} {payload['currency']}"
         f"{('（' + str(payload['baseline_window_days']) + '日每日中位数）') if payload.get('baseline_window_days') else ''}\n"
         f"降幅：{payload['drop_percent']}%\n"
         f"{historical_line}{score_line}"

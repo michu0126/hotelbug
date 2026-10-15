@@ -29,16 +29,24 @@ from app.models.tables import (
 from app.providers.gha_catalog import candidate_progress as gha_candidate_progress
 from app.providers.ihg_sitemap import STATE_KEY as IHG_SITEMAP_STATE_KEY
 from app.providers.ihg_sitemap import property_code as ihg_sitemap_code
+from app.providers.marriott_catalog import ROOT as MARRIOTT_EN_ROOT
+from app.providers.marriott_cn_catalog import ROOT as MARRIOTT_CN_ROOT
 from app.providers.registry import FACTORIES
 from app.schemas.domain import HotelData, JobInput, JobKind, ProviderName
 from app.schemas.watchlists import TARGET_FIELDS, WatchInput, WatchToggle
 from app.services.calendar import get_calendar, month_bounds, month_dates
+from app.services.calendar_hint_coverage import calendar_hint_coverage_by_provider
 from app.services.catalog_coverage import directory_coverage
 from app.services.catalogs import read_sitemaps
 from app.services.history import get_offer_trend, get_stay_offers
-from app.services.ihg_catalogs import directory_policy
+from app.services.ihg_catalogs import (
+    request_directory_root,
+    selected_directory_pages,
+    selected_directory_root,
+)
 from app.services.jobs import enqueue
 from app.services.offer_policy import classify_offer
+from app.services.price_coverage import price_coverage_by_provider
 from app.services.rates import upsert_hotel
 from app.services.runtime_settings import (
     MonitoringInput,
@@ -199,7 +207,7 @@ async def dashboard(db: Db):
         "global_monitoring_enabled": runtime.global_monitoring_enabled,
         "alert_drop_fraction": str(runtime.alert_drop_fraction),
         "alert_min_history_days": runtime.alert_min_history_days,
-        "message": "IHG、雅高与 GHA 官网页面采集已通过开发机单酒店 Worker 入库实测；万豪、希尔顿、凯悦、群晖实采与全球覆盖仍在验证。降价复查与 Telegram 发送链路已实现。",
+        "message": "IHG、雅高与 GHA 已通过开发机单酒店 Worker 入库实测；万豪中文官网独立浏览器取得同一酒店同一晚 7 个房型报价，另一个目录自动收录酒店的真实 Worker 任务已入库 16 条公开含税报价。这些本地样本不代表当前部署或群晖已采到报价，全球目录与全年价格覆盖仍在验证。降价复查与 Telegram 发送链路已实现。",
         "hotels": await db.scalar(select(func.count()).select_from(Hotel)),
         "rates_today": await db.scalar(
             select(func.count()).select_from(PriceHistory).where(PriceHistory.captured_at >= midnight)
@@ -237,7 +245,7 @@ async def providers(db: Db):
         item["implemented"] = name in FACTORIES
         item["enabled"] = runtime.provider_policy(name).enabled and item["implemented"]
         item["verification"] = {
-            "marriott": "BROWSER_OBSERVED_HTTP_UNVERIFIED",
+            "marriott": "PUBLIC_CN_PAGE_SAMPLE_VERIFIED_DEPLOYMENT_UNVERIFIED",
             "accor": "PUBLIC_PAGE_SAMPLE_VERIFIED",
             "gha": "PUBLIC_PAGE_SAMPLE_VERIFIED",
             "hilton": "PUBLIC_PAGE_OBSERVED_WORKER_UNVERIFIED",
@@ -253,11 +261,13 @@ async def providers(db: Db):
 @app.get("/api/catalogs")
 async def catalogs(db: Db):
     runtime = await load_runtime_settings(db, settings)
+    price_coverage = await price_coverage_by_provider(db, runtime)
+    calendar_hints = await calendar_hint_coverage_by_provider(db, runtime)
     result = []
     for provider in ProviderName:
         row = await db.get(AppSetting, "catalog:" + provider.value)
         data = row.value if row else {}
-        pages = list(data.get("pages", {}).values())
+        pages = list(selected_directory_pages(data, provider.value).values())
         maps = data.get("maps", [])
         candidates = (
             data.get("codes", [])
@@ -301,15 +311,42 @@ async def catalogs(db: Db):
                 }
         coverage = (
             directory_coverage(
-                data, directory_policy(provider.value)[0], utcnow(), runtime.discovery_interval_days
+                data, selected_directory_root(data, provider.value), utcnow(), runtime.discovery_interval_days
             )
             if provider in {ProviderName.IHG, ProviderName.MARRIOTT, ProviderName.HYATT}
             else {}
         )
+        source_details = {}
+        if provider == ProviderName.MARRIOTT:
+            requested = data.get("requested_root")
+            if requested not in (MARRIOTT_CN_ROOT, MARRIOTT_EN_ROOT):
+                requested = None
+            requested_job = (
+                await db.get(CrawlJob, data["requested_root_job_id"])
+                if requested and data.get("requested_root_job_id")
+                else None
+            )
+            if requested_job and (
+                requested_job.provider != provider.value or requested_job.kind != JobKind.DISCOVER_CATALOG
+            ):
+                requested_job = None
+            source_details = {
+                "selected_directory_root": selected_directory_root(data, provider.value),
+                "requested_directory_root": requested,
+                "requested_directory_root_status": requested_job.status if requested_job else None,
+                "requested_directory_root_error": requested_job.error_type if requested_job else None,
+                "directory_root_choices": [
+                    {"label": "中文官网（全球目录）", "url": MARRIOTT_CN_ROOT},
+                    {"label": "英文官网（全球目录）", "url": MARRIOTT_EN_ROOT},
+                ],
+            }
         result.append(
             {
                 **coverage,
+                **source_details,
                 "provider": provider.value,
+                "price_coverage": price_coverage[provider.value],
+                "calendar_hints": calendar_hints[provider.value],
                 "enabled": runtime.global_monitoring_enabled and runtime.provider_policy(provider).enabled,
                 "source": "OFFICIAL_BROWSER_DIRECTORY"
                 if provider in {ProviderName.IHG, ProviderName.MARRIOTT, ProviderName.HYATT}
@@ -591,6 +628,7 @@ async def add_job(data: JobInput, db: Db):
         row = await enqueue(db, data)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+    await request_directory_root(db, row)
     await db.commit()
     return {"id": row.id, "status": row.status}
 

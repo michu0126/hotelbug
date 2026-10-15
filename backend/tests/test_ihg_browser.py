@@ -1,6 +1,7 @@
 """Recorded public DOM seams exercise the flow, not live-site access."""
 
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -153,19 +154,81 @@ async def test_actual_403_is_a_failed_lookup_not_no_rooms():
     assert caught.value.code == ErrorCode.BLOCKED_BY_ANTIBOT
 
 
-async def test_property_waits_for_visible_hotel_not_global_load_event(monkeypatch):
+async def test_calendar_waits_for_new_visible_grid_instead_of_reusing_old_month(monkeypatch):
+    provider = IHGBrowserProvider()
+    dialog = MagicMock()
+    dialog.locator.return_value.evaluate_all = AsyncMock(side_effect=["", "old-grid", "new-grid"])
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.providers.ihg_browser.asyncio.sleep", sleep)
+    assert await provider._wait_calendar_grid(dialog, previous="old-grid") == "new-grid"
+    dialog.locator.assert_called_once_with("[data-year][data-month][data-day]:visible")
+    assert sleep.await_count == 2
+
+
+async def test_calendar_render_wait_has_bounded_timeout(monkeypatch):
+    provider = IHGBrowserProvider()
+    monkeypatch.setattr(
+        "app.providers.ihg_browser.time", SimpleNamespace(monotonic=MagicMock(side_effect=[0, 16]))
+    )
+    with pytest.raises(BrowserTimeout, match="calendar grid"):
+        await provider._wait_calendar_grid(MagicMock())
+
+
+@pytest.mark.parametrize("next_month", [False, True])
+async def test_choose_day_uses_visible_dialog_and_waits_between_next_clicks(monkeypatch, next_month):
     provider = IHGBrowserProvider()
     page = MagicMock()
-    page.url = SAMPLE_URL
+    dialog = page.get_by_role.return_value
+    dialog.wait_for = AsyncMock()
+    cell = dialog.locator.return_value
+    cell.count = AsyncMock(side_effect=[0, 1] if next_month else [1])
+    cell.first.click = AsyncMock()
+    next_button = dialog.get_by_role.return_value
+    next_button.click = AsyncMock()
+    ready = AsyncMock(side_effect=["october", "november"])
+    monkeypatch.setattr(provider, "_wait_calendar_grid", ready)
+    target = date(2026, 11 if next_month else 10, 8)
+    await provider._choose_day(page, target)
+    dialog.wait_for.assert_awaited_once_with(state="visible", timeout=15000)
+    dialog.locator.assert_called_once_with(
+        f'[data-year="2026"][data-month="{target.month}"][data-day="8"]:visible'
+    )
+    assert next_button.click.await_count == int(next_month)
+    assert ready.await_count == 1 + int(next_month)
+    if next_month:
+        assert ready.await_args.kwargs["previous"] == "october"
+    cell.first.click.assert_awaited_once()
+
+
+@pytest.mark.parametrize("date_step,stage", [(1, "check-in date"), (2, "check-out date")])
+async def test_date_failure_identifies_actual_picker_step(monkeypatch, date_step, stage):
+    provider, _, _ = provider_with_page(monkeypatch)
+    provider._choose_day.side_effect = [None] * (date_step - 1) + [BrowserTimeout("Offline calendar delay")]
+    with pytest.raises(ProviderError) as caught:
+        await provider.search_rates(SEARCH)
+    assert caught.value.code == ErrorCode.TIMEOUT
+    assert str(caught.value) == f"IHG booking page failed at {stage}"
+
+
+@pytest.mark.parametrize("avid", [False, True])
+async def test_property_waits_for_visible_hotel_not_global_load_event(monkeypatch, avid):
+    provider = IHGBrowserProvider()
+    page = MagicMock()
+    page.url = "https://www.ihg.com/avidhotels/hotels/us/en/kingman/igmav/hoteldetail" if avid else SAMPLE_URL
     page.goto = AsyncMock(return_value=MagicMock(status=200))
     page.title = AsyncMock(return_value=HOTEL)
     page.locator.return_value.first.wait_for = AsyncMock()
-    page.content = AsyncMock(return_value=f"<h1>{HOTEL}</h1>")
+    page.content = AsyncMock(
+        return_value=f'<div id="hotel-hero-left"><h2>{HOTEL}</h2></div><h1>Welcome marketing</h1>'
+        if avid
+        else f"<h1>{HOTEL}</h1>"
+    )
     monkeypatch.setattr(provider, "_get_page", AsyncMock(return_value=page))
-    _, hotel = await provider._open_property(SAMPLE_URL)
+    _, hotel = await provider._open_property(page.url)
     assert hotel.hotel_name == HOTEL
     assert page.goto.await_args.kwargs["wait_until"] == "commit"
     page.locator.return_value.first.wait_for.assert_awaited_once()
+    page.locator.assert_called_once_with("#hotel-hero-left h1, #hotel-hero-left h2" if avid else "h1")
 
 
 async def test_displayed_date_mismatch_fails_before_quote_collection(monkeypatch):

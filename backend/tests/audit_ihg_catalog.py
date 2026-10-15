@@ -32,7 +32,11 @@ from app.providers.ihg_page import PROPERTY_PATH
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobKind
 from app.services.catalog_coverage import directory_coverage
-from app.services.ihg_catalogs import directory_policy, discover_browser_directory
+from app.services.ihg_catalogs import (
+    directory_policy,
+    discover_browser_directory,
+    selected_directory_root,
+)
 from app.services.queue import Queue
 from app.services.watchlists import expand_global
 
@@ -130,13 +134,14 @@ def install_directory_diagnostics(provider):
     FACTORIES[provider] = diagnostic_factory
 
 
-async def ensure_audit_database(sessions, provider):
+async def ensure_audit_database(sessions, provider, *, require_marker=False):
     directory_policy(provider)
     async with sessions() as db, db.begin():
         marker = await db.get(AppSetting, "audit:directory-only")
         if marker:
             assert marker.value == {"provider": provider}, "Different directory audit provider"
             return
+        assert not require_marker, "Explicit database requires an existing isolated directory audit marker"
         for model in (CrawlJob, Hotel, PriceHistory, NotificationLog, AppSetting, ProviderStatus):
             assert not await db.scalar(select(func.count()).select_from(model)), (
                 "Not an empty isolated directory audit database"
@@ -144,14 +149,18 @@ async def ensure_audit_database(sessions, provider):
         db.add(AppSetting(key="audit:directory-only", value={"provider": provider}))
 
 
-async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=print, provider="ihg"):
+def emit_progress(message):
+    print(message, flush=True)
+
+
+async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=emit_progress, provider="ihg"):
     """Every source is selected by the actual durable discovery scheduler.
 
     Stop on the first unsuccessful read; never reset cooldowns or retries.
     Excluded previously tested pages remain pending, not falsely successful.
     """
     await ensure_audit_database(sessions, provider)
-    root, directory_url = directory_policy(provider)
+    _, directory_url = directory_policy(provider)
     excluded = {directory_url(url) for url in excluded}
     async with sessions() as db, db.begin():
         previous_quotes = await db.scalar(select(func.count()).select_from(PriceHistory))
@@ -199,6 +208,16 @@ async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=print,
                 outcome = "NO_DIRECTORY_DUE"
                 continue
             job_id, priority = job.id, job.priority
+            emit(
+                json.dumps(
+                    {
+                        "stage": "directory_worker",
+                        "job_id": job_id,
+                        "source": job.payload["official_url"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
         await queue.put(job_id, priority)
         await process_one(sessions, queue, settings)
         # Worker may have deferred an otherwise healthy task solely for its
@@ -240,8 +259,11 @@ async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=print,
         # This demonstrates the real connection to yearly scheduling, without
         # executing/re-testing a quote or writing any invented price.
         generated = await expand_global(db, settings) if completed else 0
+        catalog = state.value if state else {}
+        root = selected_directory_root(catalog, provider)
         report = {
             "provider": provider,
+            "selected_directory_root": root,
             "outcome": outcome,
             "directory_jobs_succeeded_this_run": completed,
             "real_hotels_persisted": hotels,
@@ -254,9 +276,7 @@ async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=print,
             "blocked_until": provider_state.blocked_until.isoformat()
             if provider_state and provider_state.blocked_until
             else None,
-            "coverage": directory_coverage(
-                state.value if state else {}, root, utcnow(), settings.discovery_interval_days
-            ),
+            "coverage": directory_coverage(catalog, root, utcnow(), settings.discovery_interval_days),
         }
         assert quotes == previous_quotes and notifications == previous_notifications, (
             "Directory audit unexpectedly wrote prices/notifications"
@@ -265,11 +285,19 @@ async def run_batch(sessions, queue, settings, limit=4, excluded=(), emit=print,
         return report
 
 
-async def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=("ihg", "marriott", "hyatt"), default="ihg")
+    location = parser.add_mutually_exclusive_group(required=True)
+    location.add_argument("--state-dir", type=Path, help="Dedicated audit folder, never production data")
+    location.add_argument(
+        "--database", type=Path, help="Resume an existing marked isolated directory audit database"
+    )
     parser.add_argument(
-        "--state-dir", type=Path, required=True, help="Dedicated audit folder, never production data"
+        "--session-dir", type=Path, help="Existing project-owned browser session folder, never a user profile"
+    )
+    parser.add_argument(
+        "--report", type=Path, help="Optional new JSON report path; existing reports are never overwritten"
     )
     parser.add_argument("--proxy")
     parser.add_argument("--max-pages", type=int, choices=range(1, 21), default=4)
@@ -282,12 +310,25 @@ async def main():
         action="store_true",
         help="IHG only: at most one normal public hotel-link visit across the batch, no quote request",
     )
-    args = parser.parse_args()
-    if args.directory_diagnostics:
-        install_directory_diagnostics(args.provider)
-    directory = args.state_dir.resolve()
-    directory.mkdir(parents=True, exist_ok=True)
-    settings = Settings(
+    args = parser.parse_args(argv)
+    if args.database:
+        args.database = args.database.resolve()
+        if not args.database.is_file():
+            parser.error("--database must name an existing isolated audit database")
+    if args.state_dir:
+        args.state_dir = args.state_dir.resolve()
+    if args.session_dir:
+        args.session_dir = args.session_dir.resolve()
+    if args.report:
+        args.report = args.report.resolve()
+        if args.report.exists():
+            parser.error("Use a new --report path; existing evidence is preserved")
+    return args
+
+
+def audit_settings(args):
+    browser = {"browser_session_dir": str(args.session_dir)} if args.session_dir else {}
+    return Settings(
         _env_file=None,
         provider_overrides={name: ProviderPolicy(enabled=name == args.provider) for name in FACTORIES},
         browser_channel="chrome",
@@ -296,29 +337,65 @@ async def main():
         telegram_chat_id="",
         catalog_jobs_per_tick=1,
         global_jobs_per_tick=1,
+        job_timeout_seconds=300,
+        **browser,
     )
-    engine = create_async_engine("sqlite+aiosqlite:///" + str(directory / "catalog-audit.sqlite"))
+
+
+async def main(argv=None):
+    args = parse_args(argv)
+    if args.directory_diagnostics:
+        install_directory_diagnostics(args.provider)
+    if args.state_dir:
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+    database = args.database or args.state_dir / "catalog-audit.sqlite"
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+    report_stream = args.report.open("x", encoding="utf-8") if args.report else None
+    report = {"provider": args.provider, "database": str(database), "outcome": "RUNNING"}
+    settings = audit_settings(args)
+    engine = create_async_engine("sqlite+aiosqlite:///" + database.as_posix())
     redis = FakeRedis(decode_responses=True)
     try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
+        if args.database:
+            # Explicit resume never initializes or modifies an unmarked database.
+            await ensure_audit_database(sessions, args.provider, require_marker=True)
+        else:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
         if args.follow_six_senses:
             assert args.provider == "ihg", "Public Six Senses hotel-link probe is IHG-only"
             from probe_ihg_sixsenses import install_public_link_probe
 
             install_public_link_probe(sessions)
-        report = await run_batch(
-            sessions, Queue(redis), settings, args.max_pages, args.exclude_url, provider=args.provider
+        report.update(
+            await run_batch(
+                sessions, Queue(redis), settings, args.max_pages, args.exclude_url, provider=args.provider
+            )
         )
         if report["outcome"] == "DIRECTORY_READ_UNSUCCESSFUL":
             raise SystemExit(2)
+    except BaseException as exc:
+        report["diagnostic_error_type"] = type(exc).__name__
+        if report["outcome"] == "RUNNING":
+            report["outcome"] = "AUDIT_ERROR"
+        raise
     finally:
         try:
             await close_browser_sessions()
+            report["cleanup_status"] = "SUCCEEDED"
+        except BaseException:
+            report["cleanup_status"] = "FAILED"
+            raise
         finally:
-            await redis.aclose()
-            await engine.dispose()
+            try:
+                await redis.aclose()
+                await engine.dispose()
+            finally:
+                if report_stream:
+                    with report_stream:
+                        json.dump(report, report_stream, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

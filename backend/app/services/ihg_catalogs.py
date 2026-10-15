@@ -5,15 +5,18 @@ The original module name remains compatible with existing IHG callers.
 
 from collections import deque
 from datetime import timedelta
+from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ErrorCode
-from app.models.tables import AppSetting, CrawlJob, ProviderStatus, utcnow
+from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, utcnow
 from app.providers.ihg_catalog import ROOT as IHG_ROOT
 from app.providers.ihg_catalog import directory_url as ihg_directory_url
 from app.schemas.domain import CatalogPageData, JobInput, JobKind
+from app.services.capacity import load_capacity
+from app.services.catalog_coverage import reachable_directory_pages
 from app.services.jobs import CATALOG_PRIORITY, LIVE, enqueue
 from app.services.rates import upsert_hotel
 
@@ -32,6 +35,48 @@ def directory_policy(provider):
 
         return ROOT, directory_url
     raise ValueError("Provider public directory not implemented")
+
+
+def selected_directory_root(data: dict, provider: str) -> str:
+    default, _ = directory_policy(provider)
+    if provider == "marriott":
+        from app.providers.marriott_cn_catalog import ROOT as CN_ROOT
+
+        if data.get("root") in (default, CN_ROOT):
+            return data["root"]
+    return default
+
+
+def selected_directory_pages(data: dict, provider: str) -> dict:
+    if provider not in {"ihg", "marriott", "hyatt"}:
+        return data.get("pages", {})
+    root = selected_directory_root(data, provider)
+    pages = reachable_directory_pages(data, root, retain_legacy=True)
+    if provider != "marriott":
+        return pages
+    origin = urlparse(root).hostname
+    return {url: info for url, info in pages.items() if urlparse(url).hostname == origin}
+
+
+async def request_directory_root(session, job) -> None:
+    """Record an explicit admin choice; automatic jobs cannot change the source.
+
+    Last submitted choice wins even when older jobs finish later. Keep the
+    current source until the requested root has actually been read successfully.
+    """
+    if job.provider != "marriott" or job.kind != JobKind.DISCOVER_CATALOG:
+        return
+    default, normalize = directory_policy(job.provider)
+    from app.providers.marriott_cn_catalog import ROOT as CN_ROOT
+
+    try:
+        source = normalize(job.payload.get("official_url", ""))
+    except Exception:
+        return  # Normal Worker validation reports malformed user input.
+    if source not in (default, CN_ROOT):
+        return
+    state = await catalog_state(session, job.provider)
+    state.value = {**state.value, "requested_root": source, "requested_root_job_id": job.id}
 
 
 async def catalog_state(session, provider="ihg"):
@@ -81,12 +126,11 @@ async def discover_browser_directory(sessions, queue, settings, provider_name) -
                 return 0
             state = await catalog_state(session, provider_name)
             data = dict(state.value)
+            root = selected_directory_root(data, provider_name)
             pages = {url: dict(info) for url, info in data.get("pages", {}).items()}
             pages.setdefault(root, {"next_scan_at": 0})
-            pending = await session.scalar(
-                select(func.count()).select_from(CrawlJob).where(CrawlJob.status.in_(LIVE))
-            )
-            budget = min(settings.catalog_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
+            capacity = await load_capacity(session, settings)
+            budget = min(settings.catalog_jobs_per_tick, capacity.available_for(provider_name))
             live = (
                 await session.scalars(
                     select(CrawlJob).where(
@@ -97,9 +141,11 @@ async def discover_browser_directory(sessions, queue, settings, provider_name) -
                 )
             ).all()
             live_urls = {j.payload.get("official_url") for j in live}
+            live_ids = {j.id for j in live}
             unseen = deque()
             repairs = []
-            for url, info in pages.items():
+            for url in selected_directory_pages({**data, "pages": pages}, provider_name):
+                info = pages[url]
                 needs_audit = info.get("status") in {"SUCCEEDED", "PARTIAL"} and (
                     "directory_urls" not in info or "hotel_ids" not in info
                 )
@@ -133,7 +179,10 @@ async def discover_browser_directory(sessions, queue, settings, provider_name) -
                 )
                 info.update(status="QUEUED", job_id=job.id)
                 repair_last = use_repair
-                created += 1
+                if job.id not in live_ids:
+                    capacity.consume(provider_name)
+                    live_ids.add(job.id)
+                    created += 1
             if created:
                 data["repair_last"] = repair_last
             state.value = {**data, "pages": pages}
@@ -150,19 +199,45 @@ async def persist_catalog(session, job, result: CatalogPageData, settings):
         raise ValueError("catalog source does not match job")
     state = await catalog_state(session, job.provider)
     data = dict(state.value)
+    source = directory_url(str(result.source_url))
+    if (
+        job.provider == "marriott"
+        and data.get("requested_root") == source
+        and data.get("requested_root_job_id") == job.id
+    ):
+        data["root"] = source
+    selected_origin = (
+        urlparse(selected_directory_root(data, job.provider)).hostname if job.provider == "marriott" else None
+    )
+    previous_source = selected_origin is not None and urlparse(source).hostname != selected_origin
     pages = {url: dict(info) for url, info in data.get("pages", {}).items()}
     for url in result.directory_urls:
         pages.setdefault(directory_url(str(url)), {"next_scan_at": 0})
     urls = list(data.get("urls", []))
     seen = set(urls)
     for hotel in result.hotels:
-        await upsert_hotel(session, hotel)
+        existing = (
+            (
+                await session.scalar(
+                    select(Hotel).where(
+                        Hotel.provider == hotel.provider,
+                        Hotel.provider_hotel_id == hotel.provider_hotel_id,
+                    )
+                )
+            )
+            if previous_source
+            else None
+        )
+        # An old source can finish after the admin has switched roots. Retain
+        # its page observation, but not at the cost of restoring old URLs and
+        # names over an already accepted current-source hotel identity.
+        if not (existing and urlparse(existing.official_url).hostname == selected_origin):
+            await upsert_hotel(session, hotel)
         url = str(hotel.official_url)
         if url not in seen:
             urls.append(url)
             seen.add(url)
     now = utcnow()
-    source = directory_url(str(result.source_url))
     error = (
         None
         if result.complete
@@ -181,13 +256,16 @@ async def persist_catalog(session, job, result: CatalogPageData, settings):
         "directory_urls": [directory_url(str(url)) for url in result.directory_urls],
         "hotel_ids": [hotel.provider_hotel_id for hotel in result.hotels],
         "last_scan_at": now.timestamp(),
+        "last_attempt_at": now.timestamp(),
         "next_scan_at": (
             now + (timedelta(days=settings.discovery_interval_days) if page_complete else timedelta(hours=1))
         ).timestamp(),
         "last_error": error,
         "job_id": job.id,
     }
-    state.value = {**data, "pages": pages, "urls": urls, "cursor": len(urls), "last_error": error}
+    if source in selected_directory_pages({**data, "pages": pages}, job.provider):
+        data["last_error"] = error
+    state.value = {**data, "pages": pages, "urls": urls, "cursor": len(urls)}
 
 
 async def record_catalog_failure(session, job, error, settings=None):
@@ -206,6 +284,7 @@ async def record_catalog_failure(session, job, error, settings=None):
         **pages.get(url, {}),
         "status": "FAILED",
         "last_error": error.code.value,
+        "last_attempt_at": now.timestamp(),
         "next_scan_at": (
             now
             + (
@@ -220,4 +299,6 @@ async def record_catalog_failure(session, job, error, settings=None):
         # Keep the failed regional page visible, not falsely complete/empty.
         # Normal source refresh can reconsider it, without hourly homepage reads.
         pages[url].update(redirected_to=IHG_ROOT, last_scan_at=now.timestamp())
-    state.value = {**data, "pages": pages, "last_error": error.code.value}
+    if url in selected_directory_pages({**data, "pages": pages}, job.provider):
+        data["last_error"] = error.code.value
+    state.value = {**data, "pages": pages}

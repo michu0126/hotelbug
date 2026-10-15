@@ -28,9 +28,16 @@ def property_identity(url: str):
     return match
 
 
+def property_heading_selector(url: str) -> str:
+    # IGMAV's H1 is a marketing paragraph. Its actual property title is the
+    # uniquely scoped hero H2; do not promote arbitrary page headings.
+    return "#hotel-hero-left h1, #hotel-hero-left h2" if property_identity(url)[1] == "avidhotels" else "h1"
+
+
 def parse_hotel(html: str, url: str) -> HotelData:
     identity = property_identity(url)
-    heading = BeautifulSoup(html, "html.parser").select_one("h1")
+    headings = BeautifulSoup(html, "html.parser").select(property_heading_selector(url))
+    heading = headings[0] if headings and (identity[1] != "avidhotels" or len(headings) == 1) else None
     if heading is None or not heading.get_text(" ", strip=True):
         raise ProviderError(ErrorCode.PROVIDER_CHANGED, "IHG hotel name not loaded")
     return HotelData(
@@ -41,6 +48,31 @@ def parse_hotel(html: str, url: str) -> HotelData:
         city=identity[3],
         official_url=url,
     )
+
+
+def _same_avid_name(left: str, right: str) -> bool:
+    # The observed detail hero uses "avid hotel", while the selected booking
+    # header uses "avid hotels". Only this exact brand inflection is an alias;
+    # the whole remaining property name must still agree.
+    return bool(
+        re.match(r"^avid hotels? ", left)
+        and re.match(r"^avid hotels? ", right)
+        and re.sub(r"^avid hotels? ", "avid hotels ", left)
+        == re.sub(r"^avid hotels? ", "avid hotels ", right)
+    )
+
+
+def _review_identity_confirmed(soup, code: str) -> bool:
+    identities = set()
+    for link in soup.select('a[href*="/hoteldetail/hotel-reviews"]'):
+        url = urlparse(link.get("href", ""))
+        identity = PROPERTY_PATH.fullmatch(url.path.removesuffix("/hotel-reviews"))
+        if url.scheme == "https" and url.netloc == "www.ihg.com" and identity:
+            selected = parse_qs(url.query, keep_blank_values=True).get("qSlH")
+            if selected is not None and selected != [code]:
+                return False
+            identities.add(identity[4].upper())
+    return identities == {code}
 
 
 def _verify_stay_query(url: str, request: RateRequest, *, selected_hotel=True):
@@ -130,7 +162,8 @@ def hotel_search_unavailable(
     if NO_ROOMS not in card.get_text(" ", strip=True):
         return False
     headings = card.select('h2[data-testid="brandHotelNameSID"]')
-    if len(headings) != 1 or headings[0].get_text(" ", strip=True) != hotel_name:
+    displayed = headings[0].get_text(" ", strip=True) if len(headings) == 1 else ""
+    if len(headings) != 1 or (displayed != hotel_name and not _same_avid_name(displayed, hotel_name)):
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG unavailable hotel name mismatch")
     identities = set()
     for link in card.select("a[href]"):
@@ -161,7 +194,14 @@ def hotel_search_unavailable(
 def verify_displayed_stay(html: str, request: RateRequest, hotel_name: str, dates: list[str], guests: str):
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.select_one('[data-testid="hotelDetailsInfoHotelName"]')
-    if not heading or heading.get_text(" ", strip=True) != hotel_name:
+    displayed = heading.get_text(" ", strip=True) if heading else ""
+    if not heading or (
+        displayed != hotel_name
+        and not (
+            _same_avid_name(displayed, hotel_name)
+            and _review_identity_confirmed(soup, request.provider_hotel_id.upper())
+        )
+    ):
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG displayed hotel mismatch")
     if dates != [
         f"{day.month:02d}/{day.day:02d}/{day.year}" for day in (request.check_in, request.check_out)

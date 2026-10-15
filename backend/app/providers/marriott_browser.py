@@ -42,15 +42,15 @@ def guest_count(label: str) -> int:
     return int(match.group(1))
 
 
-def parse_hotel_page(html: str, code: str) -> HotelData:
+def parse_hotel_page(html: str, code: str, root: str = ROOT) -> HotelData:
     code = hotel_code(code)
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.select_one(f'a[href^="/hotels/travel/{code.lower()}-"] h3.hotel-name')
     link = heading.parent if heading else None
     if link is None or not heading.get_text(" ", strip=True):
         raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Marriott hotel identity missing from booking page")
-    href = urljoin(ROOT, link["href"])
-    if urlparse(href).hostname != "www.marriott.com":
+    href = urljoin(root, link["href"])
+    if root not in (ROOT, ROOT + ".cn") or urlparse(href).netloc != urlparse(root).netloc:
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "Unexpected Marriott hotel URL")
     return HotelData(
         provider="marriott",
@@ -147,9 +147,47 @@ class MarriottBrowserProvider(HotelProvider):
         self._proxy_server = proxy_server
         self._session_dir = session_dir
         self._page: Page | None = None
+        self._root = ROOT
+        self._official_code: str | None = None
 
     def configure_hotel(self, hotel_name: str) -> None:
         self._hotel_name = hotel_name
+
+    def configure_hotel_url(self, official_url: str) -> None:
+        url = urlparse(official_url)
+        if url.netloc == "www.marriott.com.cn" and url.path == "/search/availabilityCalendar.mi":
+            query = parse_qs(url.query, keep_blank_values=True)
+            code = query.get("propertyCode", [""])[0]
+            if (
+                url.scheme != "https"
+                or url.fragment
+                or set(query) - {"showFullPrice"}
+                != {"isRateCalendar", "propertyCode", "isSearch", "currency"}
+                or any(len(values) != 1 for values in query.values())
+                or query.get("isRateCalendar") != ["true"]
+                or query.get("isSearch") != ["true"]
+                or query.get("currency") != [""]
+                or query.get("showFullPrice", ["false"]) != ["false"]
+            ):
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott official calendar URL invalid")
+            self._official_code = hotel_code(code)
+            self._root = "https://www.marriott.com.cn"
+            return
+        match = re.fullmatch(
+            r"/(?:en-us/)?hotels/(?:travel/)?([a-z0-9]{5})-[a-z0-9-]+(?:/overview)?/?", url.path
+        )
+        if (
+            url.scheme != "https"
+            or url.netloc not in ("www.marriott.com", "www.marriott.com.cn")
+            or not match
+            or url.query
+            or url.fragment
+        ):
+            raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott official property URL invalid")
+        # Select the published property's locale explicitly; never switch host
+        # automatically after a denial or copy the user's browser session.
+        self._root = "https://" + url.netloc
+        self._official_code = match[1].upper()
 
     async def _get_page(self) -> Page:
         if self._page is None:
@@ -177,6 +215,26 @@ class MarriottBrowserProvider(HotelProvider):
 
     async def _open_hotel(self, code: str, hotel_name: str | None = None) -> Page:
         code = hotel_code(code)
+        if self._official_code and self._official_code != code:
+            raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott configured property code mismatch")
+        if self._root.endswith(".cn"):
+            page = await self._get_page()
+            response = await page.goto(
+                self._root
+                + "/search/availabilityCalendar.mi?isRateCalendar=true&propertyCode="
+                + code
+                + "&isSearch=true&currency=",
+                wait_until="domcontentloaded",
+                timeout=45000,
+            )
+            await self._check_access(page, response.status if response else None)
+            await page.locator(f'a[href^="/hotels/travel/{code.lower()}-"] h3.hotel-name').wait_for(
+                state="visible", timeout=30000
+            )
+            if urlparse(page.url).netloc != "www.marriott.com.cn":
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott Chinese page redirected off site")
+            parse_hotel_page(await page.content(), code, self._root)
+            return page
         name = hotel_name or self._hotel_name
         if not name:
             raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Marriott homepage search needs a hotel name")
@@ -211,6 +269,16 @@ class MarriottBrowserProvider(HotelProvider):
         return page
 
     async def discover_catalog(self, query: dict) -> CatalogPageData:
+        if urlparse(query.get("official_url", "")).hostname == "www.marriott.com.cn":
+            from app.providers.marriott_cn_catalog import discover
+
+            try:
+                return await discover(self, query)
+            except PlaywrightError as exc:
+                raise ProviderError(
+                    ErrorCode.TIMEOUT if isinstance(exc, PlaywrightTimeout) else ErrorCode.NETWORK_ERROR,
+                    "Marriott Chinese public directory page failed",
+                ) from exc
         from app.providers.marriott_catalog import (
             BUCKETS,
             directory_url,
@@ -288,6 +356,9 @@ class MarriottBrowserProvider(HotelProvider):
             raise ProviderError(
                 ErrorCode.NOT_IMPLEMENTED, "Browser quotes currently require one room and one night"
             )
+        if self._root.endswith(".cn"):
+            await self._set_chinese_search(page, search)
+            return
         guests = page.get_by_role("button", name=re.compile(r"ROOMS & GUESTS|1 Room, \d+ Guests?"))
         current_adults = guest_count(await guests.first.inner_text())
         await guests.first.click()
@@ -330,7 +401,89 @@ class MarriottBrowserProvider(HotelProvider):
             "Marriott room results are missing; no availability has not been confirmed",
         )
 
+    async def _set_chinese_search(self, page: Page, search: RateRequest) -> None:
+        guests = page.get_by_role("button", name=re.compile(r"^1 间客房, \d+ 宾客$"))
+        label = await guests.inner_text()
+        current = int(re.search(r", (\d+) 宾客", label)[1])
+        if current != search.adults:
+            await guests.click()
+            name = "添加 成人" if current < search.adults else "删除 成人"
+            for _ in range(abs(current - search.adults)):
+                await page.get_by_role("button", name=re.compile(name + "$")).click()
+            await page.get_by_role("button", name="更新搜索", exact=True).click()
+            await page.get_by_role("button", name=f"1 间客房, {search.adults} 宾客", exact=True).wait_for()
+        cell = page.get_by_role("gridcell", name=day_label(search.check_in), exact=True)
+        for _ in range(13):
+            if await cell.count() and await cell.is_visible():
+                await cell.click()
+                break
+            following = page.get_by_role("button", name="Next Month", exact=True)
+            if not await following.is_enabled():
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott date beyond booking window")
+            before = await page.get_by_role("gridcell").first.get_attribute("aria-label")
+            await following.click()
+            await page.wait_for_function(
+                "old => document.querySelector('[role=gridcell]')?.getAttribute('aria-label') !== old",
+                arg=before,
+                timeout=15000,
+            )
+        else:
+            raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott date outside one-year calendar")
+        await page.get_by_role("button", name="继续", exact=True).click()
+        await page.get_by_role("heading", name="选择客房和房价", exact=True).wait_for(timeout=45000)
+        await self._check_access(page, None)
+        if urlparse(page.url).netloc != "www.marriott.com.cn":
+            raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott Chinese quotes redirected off site")
+        from app.providers.marriott_cn import verify_summary
+
+        verify_summary(await page.content(), search)
+
     async def _collect_rates(self, page: Page, search: RateRequest) -> list[RateData]:
+        if self._root.endswith(".cn"):
+            from app.providers.marriott_cn import parse_room_page as parse_chinese_room
+            from app.providers.marriott_cn import verify_summary
+
+            taxes = page.get_by_test_id("showFullPrice")
+            # The styled label overlays the input in ordinary 1280px Chromium.
+            # Click the visible label, not the covered native checkbox.
+            if not await taxes.is_checked():
+                await page.locator('label[for="显示税项及费用"]').click()
+            from playwright.async_api import expect
+
+            await expect(taxes).to_be_checked()
+            await page.locator(".rate-details .taxes-label:not(.d-none)").first.wait_for(
+                state="visible", timeout=15000
+            )
+            verify_summary(await page.content(), search)
+            rooms = page.locator(".room-rate-wrapper")
+            counter = await page.locator(".available-room-label").inner_text()
+            count = re.fullmatch(r"([1-9][0-9]*) 可用客房", counter.strip())
+            if not count or int(count[1]) > 500:
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Marriott Chinese room count missing")
+            expected = int(count[1])
+            for _ in range(expected):
+                mounted = await rooms.count()
+                if mounted == expected:
+                    break
+                if not 0 < mounted < expected:
+                    raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott Chinese room count mismatch")
+                # At laptop/Worker viewport sizes, cards mount in scroll chunks.
+                # Read all published rooms instead of calling the first two a
+                # complete success. This only scrolls the normal visible page.
+                await rooms.last.scroll_into_view_if_needed()
+                await page.wait_for_function(
+                    "n => document.querySelectorAll('.room-rate-wrapper').length > n",
+                    arg=mounted,
+                    timeout=15000,
+                )
+            if await rooms.count() != expected:
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott Chinese room list incomplete")
+            result = []
+            for index in range(expected):
+                result.extend(parse_chinese_room(await rooms.nth(index).inner_html(), search))
+            if not result:
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Marriott Chinese public quotes missing")
+            return result
         if not await page.locator('a[href*="roomPoolCode="]').count():
             raise ProviderError(
                 ErrorCode.PROVIDER_CHANGED,
@@ -369,7 +522,7 @@ class MarriottBrowserProvider(HotelProvider):
             raise ProviderError(ErrorCode.NOT_IMPLEMENTED, "Discovery requires hotel code and name")
         try:
             page = await self._open_hotel(code, name)
-            return [parse_hotel_page(await page.content(), code)]
+            return [parse_hotel_page(await page.content(), code, self._root)]
         except PlaywrightTimeout as exc:
             if self._page:
                 await self._check_access(self._page, None)
@@ -380,7 +533,7 @@ class MarriottBrowserProvider(HotelProvider):
     async def get_hotel_details(self, hotel_id: str) -> HotelData:
         try:
             page = await self._open_hotel(hotel_id)
-            return parse_hotel_page(await page.content(), hotel_id)
+            return parse_hotel_page(await page.content(), hotel_id, self._root)
         except PlaywrightTimeout as exc:
             if self._page:
                 await self._check_access(self._page, None)
@@ -403,13 +556,20 @@ class MarriottBrowserProvider(HotelProvider):
     async def get_calendar_rates(self, search: RateRequest) -> list[RateData]:
         return await self.search_rates(search)
 
+    async def get_calendar_hints(self, request):
+        from app.providers.marriott_calendar_hints import collect_calendar_hints
+
+        return await collect_calendar_hints(self, request)
+
     async def health_check(self) -> HealthResult:
         day = date.today() + timedelta(days=10)
         previous_name = self._hotel_name
-        self._hotel_name = "New York Marriott Marquis"
+        code = self._official_code or "NYCMQ"
+        if self._official_code is None:
+            self._hotel_name = "New York Marriott Marquis"
         try:
             rates = await self.search_rates(
-                RateRequest(provider_hotel_id="NYCMQ", check_in=day, check_out=day + timedelta(days=1))
+                RateRequest(provider_hotel_id=code, check_in=day, check_out=day + timedelta(days=1))
             )
         finally:
             self._hotel_name = previous_name

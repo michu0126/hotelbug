@@ -189,6 +189,55 @@ async def test_cleanup_rejects_unbounded_batches(sessions, limit):
             await expire_pending_stays(db, limit=limit)
 
 
+@pytest.mark.parametrize("month", ["2001-01", "9999-12", "invalid", "2026-1", None, 202610])
+async def test_deferred_month_hints_expire_without_stay_dates(sessions, month):
+    async with sessions() as db, db.begin():
+        job = legacy_job(
+            provider="marriott",
+            kind=JobKind.FETCH_CALENDAR_HINTS,
+            check_in=None,
+            check_out=None,
+            payload={"month": month},
+        )
+        db.add(job)
+        assert await expire_pending_stays(db) == 1
+        assert job.status == "CANCELLED"
+        assert job.error_message == "Original query timeout; " + OUTSIDE_WINDOW_MESSAGE
+        assert job.error_type == "TIMEOUT" and job.retry_count == 2
+
+
+async def test_month_hints_keep_partial_first_and_last_months_and_obey_shared_limit(sessions):
+    from app.schemas.calendar_hints import SHANGHAI
+
+    today = utcnow().astimezone(SHANGHAI).date()
+    async with sessions() as db, db.begin():
+        kept = []
+        for day in (today, today + timedelta(days=364)):
+            job = legacy_job(
+                provider="marriott",
+                kind=JobKind.FETCH_CALENDAR_HINTS,
+                check_in=None,
+                check_out=None,
+                payload={"month": day.strftime("%Y-%m")},
+            )
+            db.add(job)
+            kept.append(job)
+        db.add(legacy_job())
+        stale_hint = legacy_job(
+            kind=JobKind.FETCH_CALENDAR_HINTS,
+            check_in=None,
+            check_out=None,
+            payload={"month": "2001-01"},
+        )
+        db.add(stale_hint)
+        assert await expire_pending_stays(db, limit=1) == 1
+        assert stale_hint.status == "PENDING"
+        assert await expire_pending_stays(db, limit=1) == 1
+        assert stale_hint.status == "CANCELLED"
+        assert await expire_pending_stays(db, limit=1) == 0
+        assert all(job.status == "PENDING" for job in kept)
+
+
 @pytest.mark.parametrize("cleanup_first", [True, False])
 async def test_stale_queue_reference_and_worker_guard_make_zero_provider_requests(
     sessions, queue, monkeypatch, cleanup_first

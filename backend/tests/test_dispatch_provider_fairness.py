@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import ProviderPolicy, Settings
-from app.models.tables import CrawlJob, utcnow
+from app.models.tables import AppSetting, CrawlJob, utcnow
 from app.scheduler import main as scheduler
 from app.schemas.domain import JobKind
 from app.services.jobs import due_dispatch_jobs
@@ -90,6 +90,97 @@ async def test_all_six_groups_get_a_due_slot_without_duplicate_or_extra_dispatch
     ready = [await queue.pop() for _ in range(100)]
     assert len(set(ready)) == 100 and await queue.pop() is None
     assert {p for p in providers if any(j.startswith(p + "-") for j in ready)} == set(providers)
+
+
+@pytest.mark.parametrize("aged", [False, True])
+async def test_reserved_groups_reach_worker_before_a_continuous_high_priority_backlog(
+    sessions, queue, monkeypatch, aged
+):
+    """Being in Redis is insufficient if every Worker pop still favors one group."""
+    monkeypatch.setattr(scheduler, "healthcheck_due", AsyncMock(return_value=False))
+    providers = ("marriott", "ihg", "hilton", "hyatt", "accor", "gha")
+    config = Settings(
+        global_monitoring_enabled=False,
+        provider_overrides={p: ProviderPolicy(enabled=True) for p in providers},
+    )
+    async with sessions() as db, db.begin():
+        db.add_all([job("gha", index, hours=49 if aged else 1) for index in range(200)])
+        db.add_all(
+            [job(p, 0, priority=70, hours=0, kind=JobKind.DISCOVER_CATALOG) for p in providers if p != "gha"]
+        )
+        db.add(job("gha", 9999, priority=100, kind=JobKind.VERIFY_ANOMALY))
+    for _ in range(2):
+        assert await scheduler.tick(sessions, queue, config) == 100
+        assert await queue.pop() == "gha-9999"
+        first_normal_jobs = [await queue.pop() for _ in providers]
+        assert {job_id.split("-", 1)[0] for job_id in first_normal_jobs} == set(providers)
+        # Replaying after Redis loss must retain both the fair heads and stored priorities.
+        await queue.redis.flushdb()
+    async with sessions() as db:
+        assert (await db.get(CrawlJob, "gha-0000")).priority == 80
+        assert (await db.get(CrawlJob, "ihg-0000")).priority == 70
+
+
+@pytest.mark.parametrize("kind", [JobKind.DISCOVER_CATALOG, JobKind.DISCOVER_HOTELS])
+async def test_catalog_within_a_group_is_not_starved_by_its_own_price_backlog(
+    sessions, queue, monkeypatch, kind
+):
+    monkeypatch.setattr(scheduler, "healthcheck_due", AsyncMock(return_value=False))
+    async with sessions() as db, db.begin():
+        db.add_all([job("ihg", index, priority=80) for index in range(200)])
+        db.add(job("ihg", 9999, priority=70, hours=0, kind=kind))
+    await scheduler.tick(sessions, queue, settings())
+    first = await queue.pop()
+    assert first == "ihg-0000"
+    async with sessions() as db, db.begin():
+        (await db.get(CrawlJob, first)).status = "RUNNING"
+    await scheduler.tick(sessions, queue, settings())
+    # A group slot alone cannot make the global catalog progress if the group
+    # always spends its slot querying the same existing hotels' near dates.
+    assert await queue.pop() == "ihg-9999"
+
+
+async def test_fair_head_is_pinned_until_claimed_not_rotated_on_every_tick(sessions, queue, monkeypatch):
+    monkeypatch.setattr(scheduler, "healthcheck_due", AsyncMock(return_value=False))
+    async with sessions() as db, db.begin():
+        db.add_all([job("ihg", index, priority=80) for index in range(200)])
+        db.add(job("ihg", 9999, priority=70, hours=0, kind=JobKind.DISCOVER_CATALOG))
+    for expected in ("ihg-0000", "ihg-9999", "ihg-0001"):
+        for _ in range(3):
+            # New Scheduler/Queue instances and Redis loss cannot erase the
+            # SQL head. No fast tick may demote it before a slow Worker pops.
+            await queue.redis.flushdb()
+            await scheduler.tick(sessions, queue, settings())
+            ready = await queue.redis.zrange("hotelbug:ready", 0, 0)
+            assert ready == [expected]
+            async with sessions() as db:
+                assert (await db.get(AppSetting, "dispatch_head:ihg")).value["job_id"] == expected
+        assert await queue.pop() == expected
+        async with sessions() as db, db.begin():
+            (await db.get(CrawlJob, expected)).status = "RUNNING"
+
+
+@pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "CANCELLED", "FUTURE", "DELETED"])
+async def test_finished_or_deferred_pinned_head_cannot_hold_group_forever(
+    sessions, queue, monkeypatch, status
+):
+    monkeypatch.setattr(scheduler, "healthcheck_due", AsyncMock(return_value=False))
+    async with sessions() as db, db.begin():
+        db.add(job("ihg", 0, priority=80))
+        db.add(job("ihg", 9999, priority=70, hours=0, kind=JobKind.DISCOVER_HOTELS))
+    await scheduler.tick(sessions, queue, settings())
+    assert await queue.pop() == "ihg-0000"
+    async with sessions() as db, db.begin():
+        current = await db.get(CrawlJob, "ihg-0000")
+        if status == "DELETED":
+            await db.delete(current)
+        elif status == "FUTURE":
+            current.status = "PENDING"
+            current.scheduled_at = utcnow() + timedelta(hours=1)
+        else:
+            current.status = status
+    await scheduler.tick(sessions, queue, settings())
+    assert await queue.pop() == "ihg-9999"
 
 
 @pytest.mark.parametrize("status", ["RUNNING", "FAILED", "SUCCEEDED", "CANCELLED", "FUTURE"])

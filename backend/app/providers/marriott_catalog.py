@@ -21,6 +21,10 @@ PROPERTY_PATH = re.compile(r"/en-us/hotels/travel/([a-z0-9]{5})-[a-z0-9-]+/?")
 
 def directory_url(value: str) -> str:
     url = urlparse(value)
+    if url.hostname == "www.marriott.com.cn":
+        from app.providers.marriott_cn_catalog import directory_url as chinese_directory_url
+
+        return chinese_directory_url(value)
     try:
         valid_origin = url.port in (None, 443) and url.username is None and url.password is None
     except ValueError:
@@ -42,6 +46,10 @@ def directory_url(value: str) -> str:
 
 
 def verify_directory_redirect(source: str, final: str) -> None:
+    if urlparse(source).hostname == "www.marriott.com.cn":
+        from app.providers.marriott_cn_catalog import verify_directory_redirect as verify_chinese_redirect
+
+        return verify_chinese_redirect(source, final)
     expected, actual = map(directory_url, (source, final))
     if expected == ROOT:
         matches = actual == ROOT

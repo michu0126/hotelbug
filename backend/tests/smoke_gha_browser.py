@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 from datetime import date, timedelta
 
 from app.core.errors import ProviderError
@@ -15,22 +16,26 @@ async def main():
     parser.add_argument("--proxy")
     parser.add_argument("--code", default="10624")
     parser.add_argument("--session-dir")
+    parser.add_argument("--headed", action="store_true", help="Use a normal visible browser window")
     parser.add_argument("--date", type=date.fromisoformat, default=date.today() + timedelta(days=8))
     parser.add_argument("--all", action="store_true", help="Print every verified room offer")
     args = parser.parse_args()
     provider = GHABrowserProvider(
-        proxy_server=args.proxy, browser_channel="chrome", session_dir=args.session_dir
+        proxy_server=args.proxy,
+        browser_channel="chrome",
+        session_dir=args.session_dir,
+        headless=not args.headed,
     )
     try:
         hotel = await provider.get_hotel_details(args.code)
-        print(hotel.model_dump_json(), flush=True)
+        print(json.dumps(hotel.model_dump(mode="json"), ensure_ascii=True), flush=True)
         rates = await provider.search_rates(
             RateRequest(
                 provider_hotel_id=args.code, check_in=args.date, check_out=args.date + timedelta(days=1)
             )
         )
         for rate in rates if args.all else rates[:5]:
-            print(rate.model_dump_json(), flush=True)
+            print(json.dumps(rate.model_dump(mode="json"), ensure_ascii=True), flush=True)
         print("verified_public_quotes=", len(rates), flush=True)
     except ProviderError as exc:
         print("provider_error=", exc.code.value, str(exc), flush=True)

@@ -7,6 +7,38 @@ Complete traversal without a published worldwide total is not global coverage.
 from datetime import datetime, timedelta
 
 
+def reachable_directory_pages(data: dict, root: str, *, retain_legacy: bool = False) -> dict:
+    """Keep old observations, but schedule only the current advertised graph.
+
+    Legacy states without root edges still need their stored pages audited.
+    Once the root has published edges and hotel IDs, detached historical pages
+    no longer consume jobs or appear in current-page counters.
+    """
+    pages = data.get("pages", {})
+    root_info = pages.get(root, {})
+    if retain_legacy and not (
+        isinstance(root_info.get("directory_urls"), list) and isinstance(root_info.get("hotel_ids"), list)
+    ):
+        return pages
+    selected = {}
+    pending = [root]
+    while pending:
+        url = pending.pop()
+        if url in selected:
+            continue
+        info = pages.get(url, {})
+        selected[url] = info
+        children, identities = info.get("directory_urls"), info.get("hotel_ids")
+        if (
+            isinstance(children, list)
+            and all(isinstance(item, str) for item in children)
+            and isinstance(identities, list)
+            and all(isinstance(item, str) and item for item in identities)
+        ):
+            pending.extend(reversed(children))
+    return selected
+
+
 def directory_coverage(data: dict, root: str, now: datetime, freshness_days: int) -> dict:
     pages = data.get("pages", {})
     pending = [root]

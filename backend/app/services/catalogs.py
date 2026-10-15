@@ -7,11 +7,12 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, utcnow
 from app.providers.gha_catalog import hotel_candidate_url as gha_hotel_candidate
 from app.schemas.domain import JobInput, JobKind
+from app.services.capacity import load_capacity
 from app.services.jobs import CATALOG_PRIORITY, LIVE, enqueue
 
 ACCOR_SITEMAP = "https://all.accor.com/sitemap-fh.en.xml"
@@ -252,13 +253,16 @@ async def _discover_index(
             if await persist_source_pause(session, provider, data, now):
                 state.value = data
                 return 0
-            pending = await session.scalar(
-                select(func.count()).select_from(CrawlJob).where(CrawlJob.status.in_(LIVE))
+            capacity = await load_capacity(session, settings)
+            budget = min(settings.catalog_jobs_per_tick, capacity.available_for(provider))
+            live_ids = set(
+                await session.scalars(
+                    select(CrawlJob.id).where(CrawlJob.provider == provider, CrawlJob.status.in_(LIVE))
+                )
             )
-            budget = min(settings.catalog_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
             cursor = data.get("cursor", 0)
             urls = data.get("urls", [])
-            selected = []
+            created = 0
             skipped = set(data.get("skipped_non_hotel_urls", []))
             known_codes = set()
             if candidate_code is not None:
@@ -285,7 +289,7 @@ async def _discover_index(
                 known_codes.update(candidate_code(job.payload.get("official_url")) for job in live_details)
             # Keep the old source list and ordinal cursor. Removing entries
             # would shift positions and can silently skip an unvisited hotel.
-            while cursor < len(urls) and len(selected) < budget:
+            while cursor < len(urls) and created < budget:
                 url = urls[cursor]
                 cursor += 1
                 if provider == "gha" and gha_hotel_candidate(url) is None:
@@ -296,12 +300,10 @@ async def _discover_index(
                     if code is None or code in known_codes:
                         continue
                     known_codes.add(code)
-                selected.append(url)
-            for url in selected:
                 payload = {"official_url": url}
                 if state_key != "catalog:" + provider:
                     payload["catalog_source"] = state_key
-                await enqueue(
+                job = await enqueue(
                     session,
                     JobInput(
                         provider=provider,
@@ -310,8 +312,15 @@ async def _discover_index(
                         payload=payload,
                     ),
                 )
+                # Resuming a cursor or refreshing a source can encounter an
+                # already-live identity. It is counted by load_capacity, so
+                # neither reserve another slot nor spend this tick's budget.
+                if job.id not in live_ids:
+                    capacity.consume(provider)
+                    live_ids.add(job.id)
+                    created += 1
             state.value = {**data, "cursor": cursor, "skipped_non_hotel_urls": sorted(skipped)}
-            return len(selected)
+            return created
     finally:
         await queue.unlock(lock_key, token)
 
@@ -381,13 +390,18 @@ async def discover_accor(sessions, queue, settings, client) -> int:
                 return 0
             codes = data.get("codes", [])
             cursor = data.get("cursor", 0)
-            pending = await session.scalar(
-                select(func.count()).select_from(CrawlJob).where(CrawlJob.status.in_(LIVE))
+            capacity = await load_capacity(session, settings)
+            budget = min(settings.catalog_jobs_per_tick, capacity.available_for("accor"))
+            live_ids = set(
+                await session.scalars(
+                    select(CrawlJob.id).where(CrawlJob.provider == "accor", CrawlJob.status.in_(LIVE))
+                )
             )
-            budget = min(settings.catalog_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
-            selected = codes[cursor : cursor + budget]
-            for code in selected:
-                await enqueue(
+            created = 0
+            while cursor < len(codes) and created < budget:
+                code = codes[cursor]
+                cursor += 1
+                job = await enqueue(
                     session,
                     JobInput(
                         provider="accor",
@@ -396,8 +410,12 @@ async def discover_accor(sessions, queue, settings, client) -> int:
                         payload={"provider_hotel_id": code},
                     ),
                 )
+                if job.id not in live_ids:
+                    capacity.consume("accor")
+                    live_ids.add(job.id)
+                    created += 1
             if state is not None:
-                state.value = {**data, "cursor": cursor + len(selected)}
-            return len(selected)
+                state.value = {**data, "cursor": cursor}
+            return created
     finally:
         await queue.unlock("hotelbug:catalog:accor", token)

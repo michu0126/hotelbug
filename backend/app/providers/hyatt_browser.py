@@ -24,9 +24,18 @@ from app.providers.hyatt_page import (
     rooms_url,
     verify_stay,
 )
+from app.providers.retry_after import retry_after_seconds
 from app.schemas.domain import CatalogPageData, HealthResult, HotelData, RateData, RateRequest
 
 FRAME = '[role="dialog"] li.slide.selected > .room-rates-frame-container'
+
+
+def room_category_count(label: str) -> int:
+    # Official categories also include 公寓式客房, not only 客房 / 套房.
+    match = re.fullmatch(r"\S.*?\s*\((\d+)\)", label.strip())
+    if match is None:
+        raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Hyatt room category count is missing")
+    return int(match[1])
 
 
 class HyattBrowserProvider(AccorBrowserProvider):
@@ -59,9 +68,10 @@ class HyattBrowserProvider(AccorBrowserProvider):
         response = await page.goto(url, wait_until="commit", timeout=45000)
         retry = None
         if response is not None and response.status == 429:
-            value = await response.header_value("retry-after")
-            if value and value.isdecimal():
-                retry = int(value)
+            try:
+                retry = retry_after_seconds(await response.header_value("retry-after"))
+            except BrowserError:
+                pass  # The known 429 remains a rate limit even if its header read fails.
         await self._check_access(page, response.status if response else None, retry)
         return page
 
@@ -71,6 +81,26 @@ class HyattBrowserProvider(AccorBrowserProvider):
         if await page.locator("#currency-select").input_value() != "":
             raise ProviderError(
                 ErrorCode.INVALID_RESPONSE, "Hyatt converted display currency is not supported"
+            )
+
+    async def _load_category_rooms(self, page, panel, expected: int):
+        cards = panel.locator('[data-module="room-card"]')
+        if expected:
+            await cards.first.wait_for(state="visible", timeout=15000)
+        while True:
+            count = await cards.count()
+            if count == expected:
+                return
+            if count > expected:
+                raise ProviderError(ErrorCode.INVALID_RESPONSE, "Hyatt room count exceeds category total")
+            more = panel.get_by_role("button", name="显示更多", exact=True)
+            await more.wait_for(state="visible", timeout=15000)
+            await more.click()
+            await page.wait_for_function(
+                """previous => document.querySelector('[role="tabpanel"][aria-hidden="false"]')
+                    ?.querySelectorAll('[data-module="room-card"]').length > previous""",
+                arg=count,
+                timeout=15000,
             )
 
     async def discover_catalog(self, query: dict) -> CatalogPageData:
@@ -158,24 +188,23 @@ class HyattBrowserProvider(AccorBrowserProvider):
             seen_rooms = set()
             for label in labels:
                 stage = "room category"
-                expected_count = re.fullmatch(r"(?:客房|套房)\s*\((\d+)\)", label.strip())
-                if expected_count is None:
-                    raise ProviderError(ErrorCode.PROVIDER_CHANGED, "Hyatt room category label changed")
+                expected_count = room_category_count(label)
                 await tabs.filter(has_text=re.compile("^" + re.escape(label) + "$")).click()
                 panel = page.locator('[role="tabpanel"][aria-hidden="false"]')
                 await panel.wait_for(state="visible", timeout=15000)
                 await page.wait_for_function(
-                    """expected => document.querySelector('[role="tabpanel"][aria-hidden="false"]')
-                        ?.querySelectorAll('[data-module="room-card"]').length === expected""",
-                    arg=int(expected_count[1]),
+                    """label => [...document.querySelectorAll('[role="tab"][aria-selected="true"]')]
+                        .some(e => e.textContent.trim() === label.trim())""",
+                    arg=label,
                     timeout=15000,
                 )
+                await self._load_category_rooms(page, panel, expected_count)
                 rooms = await panel.locator('[data-module="room-card"]').evaluate_all(
                     "es => es.map(e => ({code:e.getAttribute('data-room-type-code'),"
                     "name:e.querySelector('[data-locator=room-title]')?.textContent.trim(),"
                     "price:e.querySelector('[data-locator=cash-rate] .rate-values-prices')?.textContent.trim()}))"
                 )
-                if len(rooms) != int(expected_count[1]):
+                if len(rooms) != expected_count:
                     raise ProviderError(
                         ErrorCode.INVALID_RESPONSE, "Hyatt room category has not finished updating"
                     )

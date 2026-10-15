@@ -22,6 +22,7 @@ class JobKind(StrEnum):
     DISCOVER_HOTELS = "DISCOVER_HOTELS"
     FETCH_RATE = "FETCH_RATE"
     FETCH_CALENDAR = "FETCH_CALENDAR"
+    FETCH_CALENDAR_HINTS = "FETCH_CALENDAR_HINTS"
     VERIFY_ANOMALY = "VERIFY_ANOMALY"
     PROVIDER_HEALTHCHECK = "PROVIDER_HEALTHCHECK"
 
@@ -161,6 +162,12 @@ class JobInput(BaseModel):
 
     @model_validator(mode="after")
     def required_dates(self) -> Self:
+        if self.kind == JobKind.FETCH_CALENDAR_HINTS:
+            from app.schemas.calendar_hints import month_window
+
+            if self.provider != ProviderName.MARRIOTT or not self.hotel_id or self.check_in or self.check_out:
+                raise ValueError("Monthly hints require a Marriott hotel and a month, not stay dates")
+            month_window(self.payload.get("month"))
         if self.kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY):
             if not self.hotel_id or not self.check_in or not self.check_out:
                 raise ValueError("hotel and dates required")

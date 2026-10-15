@@ -67,6 +67,61 @@ def test_public_named_plan_below_advertised_from_price_remains_visible():
     assert rate.total_price == Decimal("1000")
 
 
+@pytest.mark.parametrize(
+    "name", ["GHA Seasonal Promo Public Ch Dynamic . Breakast Included", "Non-member Flexible Rate"]
+)
+def test_explicit_public_gold_plan_is_displayed_cash_not_discarded_or_final_total(name):
+    # Actual Hotel Palace Portoroz card uses gold even for "Public Ch".
+    # Its conditions separately charge a service fee: a card's generic
+    # "Including taxes and fees" must not turn this new layout into all-fees total.
+    html = OFFER.replace("Avani Flexi", name).replace("text-dark", "text-gold")
+    rate = parse_public_offer(html, public_room(ROOM), SEARCH)
+    assert rate is not None
+    assert rate.cash_price == Decimal("6944") and rate.total_price is None
+    assert rate.member_rate is False and rate.rate_name == name
+    ordinary = parse_public_offer(html.replace("text-gold", "text-dark"), public_room(ROOM), SEARCH)
+    assert rate.offer_key() != ordinary.offer_key()
+
+
+@pytest.mark.parametrize("name", ["DISCOVERY Public Rate", "Members Public Rate", "Public Member Rate"])
+def test_gold_public_word_does_not_override_explicit_member_restriction(name):
+    html = OFFER.replace("Avani Flexi", name).replace("text-dark", "text-gold")
+    assert parse_public_offer(html, public_room(ROOM), SEARCH) is None
+
+
+def test_gold_generic_promotion_is_not_guessed_to_be_a_non_member_plan():
+    html = OFFER.replace("Avani Flexi", "Flash Sale. Breakfast Included").replace("text-dark", "text-gold")
+    assert parse_public_offer(html, public_room(ROOM), SEARCH) is None
+
+
+def test_portoroz_observed_public_card_keeps_real_currency_dates_and_display_amount():
+    search = RateRequest(provider_hotel_id="287020", check_in=date(2026, 10, 8), check_out=date(2026, 10, 9))
+    name = "GHA Seasonal Promo Public Ch Dynamic .  Breakast Included"
+    # Relevant public DOM shape captured on 2026-10-08; both responsive
+    # copies exist, but the member room FROM amount is never the named price.
+    room_html = (
+        '<h5 class="px-5">Superior Room</h5><div><span>MEMBER RATES FROM</span>'
+        "<h5>EUR 254</h5></div><span>Including taxes and fees</span>"
+    )
+    price_html = (
+        '<div><h5 class="text-gold">EUR 316/<span>night</span></h5>'
+        "<span>Including taxes and fees</span></div>"
+    )
+    html = (
+        '<div class="sm:flex sm:flex-row sm:justify-between">'
+        f'<div class="hidden sm:block"><h5>{name}</h5><span>Earn up to D$12</span></div>'
+        f'<div class="hidden sm:block">{price_html}<button class="tid-selectBtn">SELECT</button></div>'
+        f'<div class="sm:hidden"><h5>{name}</h5>{price_html}</div></div>'
+    )
+    verify_stay("<p>Thu, 08 Oct - Fri, 09 Oct 2026</p><p>ROOM 1: 2 ADULTS</p>", booking_url(search), search)
+    rate = parse_public_offer(html, public_room(room_html, allow_member_identity=True), search)
+    assert rate.cash_price == Decimal("316") and rate.total_price is None
+    assert rate.currency == "EUR" and rate.member_rate is False
+    assert rate.provider_hotel_id == "287020" and rate.check_in == search.check_in
+    assert rate.check_out == search.check_out and rate.price_basis == "nightly"
+    assert rate.room_type == "Superior Room" and "Public Ch" in rate.rate_name
+
+
 def test_capella_from_only_room_is_identity_not_a_bookable_price():
     room_html = (
         '<h5 class="px-5">Superior Accessible King Room</h5>'
@@ -118,7 +173,10 @@ def test_member_identity_does_not_relax_room_currency_or_tax_guards(old, new):
         public_room(card.replace(old, new), allow_member_identity=True)
 
 
-async def test_member_only_room_does_not_abort_public_quotes_from_other_rooms(monkeypatch):
+@pytest.mark.parametrize("explicit_gold_public", [False, True])
+async def test_member_only_room_does_not_abort_public_quotes_from_other_rooms(
+    monkeypatch, explicit_gold_public
+):
     provider = GHABrowserProvider()
     page = MagicMock()
     page.url = booking_url(SEARCH)
@@ -141,11 +199,18 @@ async def test_member_only_room_does_not_abort_public_quotes_from_other_rooms(mo
     buttons.nth.side_effect = lambda index: controls[index]
     plans = MagicMock()
     plans.first.wait_for = AsyncMock()
+    public_plan = (
+        OFFER.replace("Avani Flexi", "GHA Seasonal Promo Public Ch Dynamic . Breakast Included").replace(
+            "text-dark", "text-gold"
+        )
+        if explicit_gold_public
+        else OFFER
+    )
     plans.evaluate_all = AsyncMock(
         side_effect=[
-            [OFFER],
+            [public_plan],
             [OFFER.replace("Avani Flexi", "DISCOVERY Flexible Rate")],
-            [OFFER],
+            [public_plan],
         ]
     )
     close = MagicMock()
@@ -158,6 +223,7 @@ async def test_member_only_room_does_not_abort_public_quotes_from_other_rooms(mo
     rates = await provider.search_rates(SEARCH)
     assert {rate.room_type for rate in rates} == {"ROOM 0", "ROOM 2"}
     assert all(rate.member_rate is False for rate in rates)
+    assert all((rate.cash_price is not None) == explicit_gold_public for rate in rates)
     assert all(button.click.await_count == 1 for button in controls) and close.click.await_count == 3
     plans.click.assert_not_called()
 

@@ -260,3 +260,34 @@ Residence Special Including Breakfast为USD775/873，不能当普通公开低价
 cash/tax未知NULL；历史96增至136，通知0。未修改原全球任务或推进/重置原日期游标。
 首次观察不构成降价历史基线，不生成假Bug通知；单家末端样本也不证明全球全年全量。
 完整后端1219项通过（58.17秒），未发布或更新NAS、未调用真实Telegram投递。
+
+## 2026-10-08 Public Ch 金色公开方案修复（本地，未发布）
+
+定位NAS原失败酒店287020 / Hotel Palace Portorož，2026-10-08/09、1房2成人。
+正常Chrome公开页面的Superior Room展开View Rates / View More Rates后，存在
+`GHA Seasonal Promo Public Ch Dynamic . Breakast Included`，但其价格样式也是
+text-gold；旧脚本把这种明确公开方案当作会员价过滤，最终报PROVIDER_CHANGED。
+现只允许有明确Public或Non-member标签的金色方案，仍拒绝DISCOVERY/Member及
+无法确认资格的金色促销，不点SELECT、不登录、不进入预订。
+
+卡片显示Including taxes and fees、EUR316/night，公开Rate Conditions却说明另收
+5% Service Charge到店支付，明细GRAND TOTAL EUR316.35亦不含该额外费用。
+因此新布局只保存实际卡片展示金额cash_price，total_price未知NULL；不把四舍五入
+卡片当明细/全部费用总价。member_rate=false，price_basis=nightly；原报价键按
+金额口径隔离，不与旧total_price系列混比。截图
+`work/gha-portoroz-public-rate-conditions-20261008.jpg` 保留公开条款证据。
+
+08:43:22–25 UTC，用真实GHABrowserProvider有头Chrome执行同一失败酒店/日期条件，
+正常展开各房型及更多方案，成功返回7条公开报价：Superior Room EUR316、Superior
+Room Sea View EUR392、Junior Suite Terrace and Sea View EUR687、Venice Suite
+EUR848、Rose Suite EUR905、Piran Suite EUR1086、Palace Suite EUR1276。
+均为上述Public Ch方案，非会员、cash_price=展示金额、tax/total_price/refundable/
+breakfast_included未知；不凭方案标题或第一房型条款推断其他房型的取消/早餐资格。
+命令 `python -m tests.smoke_gha_browser --code 287020 --date 2026-10-08 --headed
+--session-dir <独立本地验证目录> --all`，退出0，verified_public_quotes=7。
+烟测先前一次因Windows GBK不能输出酒店名ž而在资料打印处退出，尚未采价；现JSON
+采用ASCII转义，仅影响输出编码。验证目录独立，不访问NAS生产资料，不写数据库/TG。
+
+新增8项回归覆盖明确资格、实际响应式DOM及完整适配流程；相关158项通过，完整后端
+1306项通过（60.39秒）。这是真实开发机浏览器采集成功，不代表NAS任务修复入库、
+GHA全球全年覆盖或最终含全部费用价格确认。未推送、发布或部署本次改动。

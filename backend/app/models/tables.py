@@ -95,6 +95,31 @@ class PriceHistory(RateFields, Base):
     job_id: Mapped[str] = mapped_column(String(36))
 
 
+class CalendarHintHistory(Base):
+    """Public calendar minimums, deliberately separate from bookable room offers."""
+
+    __tablename__ = "calendar_hint_history"
+    __table_args__ = (
+        UniqueConstraint("job_id", "check_in"),
+        Index("ix_hint_series_time", "series_key", "captured_at"),
+        Index("ix_hint_hotel_date", "hotel_id", "check_in"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    hotel_id: Mapped[str] = mapped_column(ForeignKey("hotels.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    job_id: Mapped[str] = mapped_column(String(36))
+    series_key: Mapped[str] = mapped_column(String(64))
+    check_in: Mapped[date] = mapped_column(Date)
+    adults: Mapped[int] = mapped_column(Integer)
+    rooms: Mapped[int] = mapped_column(Integer)
+    displayed_price: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    currency: Mapped[str] = mapped_column(String(3))
+    basis: Mapped[str] = mapped_column(String(64))
+    source_url: Mapped[str] = mapped_column(Text)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    raw_response_hash: Mapped[str] = mapped_column(String(64))
+
+
 class PriceStatistics(Base):
     __tablename__ = "price_statistics"
     offer_key: Mapped[str] = mapped_column(String(64), primary_key=True)

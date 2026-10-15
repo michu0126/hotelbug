@@ -1,18 +1,25 @@
 """Revisit known dates and repair missing observations without a full year sweep."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import case, func, or_, select
 
 from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, StayScan, utcnow
 from app.schemas.domain import JobInput, JobKind
+from app.services.capacity import load_capacity
+from app.services.catalog_price_source import load_catalog_price_source
 from app.services.failed_stays import expand_failed_stays
 from app.services.jobs import LIVE, enqueue, tier
+from app.services.revisit_rotation import fair_revisit_rows
 
 
-async def expand_rechecks(session, settings, enabled, budget):
+async def expand_rechecks(session, settings, enabled, budget, *, capacity=None):
     """Share the existing revisit budget fairly; unused slots serve the other lane."""
     if budget < 1 or not enabled:
+        return 0
+    capacity = capacity or await load_capacity(session, settings)
+    budget = min(budget, capacity.available_for(*enabled))
+    if budget < 1:
         return 0
     repair_budget = budget // 2
     if budget == 1:
@@ -23,16 +30,23 @@ async def expand_rechecks(session, settings, enabled, budget):
         else:
             session.add(AppSetting(key="global_revisit_single_slot_lane", value={"repair_last": repair}))
         repair_budget = int(repair)
-    repaired = await expand_failed_stays(session, settings, enabled, repair_budget)
-    revisited = await expand_successful_rechecks(session, settings, enabled, budget - repaired)
+    repaired = await expand_failed_stays(session, settings, enabled, repair_budget, capacity=capacity)
+    revisited = await expand_successful_rechecks(
+        session, settings, enabled, budget - repaired, capacity=capacity
+    )
     spare = budget - repaired - revisited
     if spare:
-        repaired += await expand_failed_stays(session, settings, enabled, spare)
+        repaired += await expand_failed_stays(session, settings, enabled, spare, capacity=capacity)
     return repaired + revisited
 
 
-async def expand_successful_rechecks(session, settings, enabled, budget):
+async def expand_successful_rechecks(session, settings, enabled, budget, *, capacity=None):
     if budget < 1:
+        return 0
+    capacity = capacity or await load_capacity(session, settings)
+    enabled = [provider for provider in enabled if capacity.available_for(provider)]
+    budget = min(budget, capacity.available_for(*enabled))
+    if not enabled or budget < 1:
         return 0
     today, now = date.today(), utcnow()
     hot_end, warm_end = today + timedelta(days=30), today + timedelta(days=90)
@@ -79,35 +93,25 @@ async def expand_successful_rechecks(session, settings, enabled, budget):
             ~attempted,
         )
     )
-    state = await session.get(AppSetting, "global_recheck_cursor")
-    value = dict(state.value) if state else {}
-    cursor_time = value.get("observed_at")
-    try:
-        cursor_time = datetime.fromisoformat(cursor_time) if isinstance(cursor_time, str) else None
-    except ValueError:
-        cursor_time = None
-    cursor_id = value.get("scan_id", "")
-    if not isinstance(cursor_id, str):
-        cursor_id = ""
-    after = (
-        or_(
-            StayScan.observed_at > cursor_time,
-            and_(StayScan.observed_at == cursor_time, StayScan.id > cursor_id),
-        )
-        if cursor_time
-        else True
+    source = await load_catalog_price_source(session)
+    query = query.where(source.hotel_predicate())
+    rows, remember = await fair_revisit_rows(
+        session,
+        query,
+        StayScan,
+        providers=enabled,
+        key="global_recheck_cursor",
+        time_field="observed_at",
+        id_field="scan_id",
+        limit=budget * 4,
     )
-    ordered = query.order_by(StayScan.observed_at, StayScan.id)
-    # Bound inspection too. The durable keyset advances past non-nightly rows
-    # rather than repeatedly stopping at the first unsupported legacy stay.
-    rows = (await session.execute(ordered.where(after).limit(budget * 4))).all()
-    if not rows and cursor_time is not None:
-        rows = (await session.execute(ordered.limit(budget * 4))).all()
     created = 0
     for scan, hotel in rows:
         if created >= budget:
             break
-        value = {"observed_at": scan.observed_at.isoformat(), "scan_id": scan.id}
+        if not capacity.available_for(hotel.provider):
+            continue
+        remember(hotel.provider, {"observed_at": scan.observed_at.isoformat(), "scan_id": scan.id})
         if (scan.check_out - scan.check_in).days != 1:
             continue
         temperature = tier((scan.check_in - today).days)
@@ -120,12 +124,9 @@ async def expand_successful_rechecks(session, settings, enabled, budget):
                 check_in=scan.check_in,
                 check_out=scan.check_out,
                 priority={"HOT": 80, "WARM": 60, "COLD": 40}[temperature],
-                payload={"adults": scan.adults, "rooms": scan.rooms},
+                payload={"adults": scan.adults, "rooms": scan.rooms, **source.payload(hotel.provider)},
             ),
         )
+        capacity.consume(hotel.provider)
         created += 1
-    if state:
-        state.value = value
-    elif rows:
-        session.add(AppSetting(key="global_recheck_cursor", value=value))
     return created

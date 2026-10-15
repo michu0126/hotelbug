@@ -7,7 +7,11 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 
 from app.providers.accor_browser import AccorBrowserProvider
-from app.providers.browser_session import close_browser_sessions, new_provider_page
+from app.providers.browser_session import (
+    close_browser_sessions,
+    close_idle_browser_sessions,
+    new_provider_page,
+)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,6 +45,7 @@ class Server(ThreadingHTTPServer):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--channel", default="chromium")
+    parser.add_argument("--headed", action="store_true", help="Exercise persistent contexts with a display")
     args = parser.parse_args()
     server = Server(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -50,7 +55,9 @@ async def main():
         with TemporaryDirectory(prefix="hotelbug-session-smoke-") as profile:
 
             async def open_page(provider="session-test"):
-                return await new_provider_page(provider, browser_channel=args.channel, session_dir=profile)
+                return await new_provider_page(
+                    provider, browser_channel=args.channel, session_dir=profile, headless=not args.headed
+                )
 
             page = await open_page()
             await page.goto(url + "/seed")
@@ -69,6 +76,21 @@ async def main():
             assert await page.locator("body").inner_text() == "null"
             await page.close()
             print("provider_isolation=PASS", flush=True)
+            page = await open_page()
+            previous_context = page.context
+            popup = await previous_context.new_page()
+            await page.close()
+            await close_idle_browser_sessions(max_idle_seconds=0)
+            assert not popup.is_closed()
+            print("idle_cleanup_protects_live_popup=PASS", flush=True)
+            await popup.close()
+            await close_idle_browser_sessions(max_idle_seconds=0)
+            page = await open_page()
+            assert page.context is not previous_context
+            await page.goto(url + "/check")
+            assert await page.locator("body").inner_text() == "hotelbug_test=present present"
+            await page.close()
+            print("idle_cleanup_releases_browser_and_preserves_profile=PASS", flush=True)
             await close_browser_sessions()
             page = await open_page()
             await page.goto(url + "/check")

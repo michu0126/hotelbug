@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.core.errors import ErrorCode, ProviderError
 from app.crawler.worker import process_one
 from app.models.tables import CrawlJob, NotificationLog, PriceHistory, ProviderStatus, StayScan
-from app.providers.hyatt_browser import FRAME, HyattBrowserProvider
+from app.providers.hyatt_browser import FRAME, HyattBrowserProvider, room_category_count
 from app.providers.hyatt_page import PROPERTY_URL, rooms_url
 from app.providers.registry import FACTORIES, create_provider
 from app.schemas.domain import HotelData, JobInput, JobKind
@@ -99,6 +99,7 @@ class RenderedPage:
         if selector == '[role="tabpanel"][aria-hidden="false"]':
             locator.locator.side_effect = self.locator
         elif selector == '[data-module="room-card"]':
+            locator.count = AsyncMock(return_value=1)
             code = "KING" if self.category == "客房 (1)" else "CAST"
             name = ROOM if code == "KING" else "嘉荟套房（1 张特大床）"
             locator.evaluate_all = AsyncMock(
@@ -164,6 +165,36 @@ async def test_reads_every_category_room_and_selected_plan_without_booking(monke
     assert page.clicks.count("close") == 2
     assert [c for c in page.clicks if c.startswith("category:")] == ["category:客房 (1)", "category:套房 (1)"]
     assert provider._navigate.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "label,total", [("客房\u00a0(10)", 10), ("公寓式客房\u00a0(3)", 3), ("套房 (12)", 12)]
+)
+def test_observed_category_totals_include_apartments(label, total):
+    assert room_category_count(label) == total
+
+
+async def test_expands_every_room_page_to_published_total():
+    provider = HyattBrowserProvider()
+    cards = MagicMock(count=AsyncMock(side_effect=[8, 16, 18]))
+    cards.first.wait_for = AsyncMock()
+    more = MagicMock(wait_for=AsyncMock(), click=AsyncMock())
+    panel = MagicMock()
+    panel.locator.return_value = cards
+    panel.get_by_role.return_value = more
+    page = MagicMock(wait_for_function=AsyncMock())
+    await provider._load_category_rooms(page, panel, 18)
+    assert more.click.await_count == 2
+    assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list] == [8, 16]
+
+
+async def test_category_overflow_is_not_accepted_as_complete():
+    panel = MagicMock()
+    panel.locator.return_value.count = AsyncMock(return_value=11)
+    panel.locator.return_value.first.wait_for = AsyncMock()
+    with pytest.raises(ProviderError, match="exceeds category total"):
+        await HyattBrowserProvider()._load_category_rooms(MagicMock(), panel, 10)
+    panel.get_by_role.assert_not_called()
 
 
 async def test_wrong_configured_property_fails_before_navigation(monkeypatch):

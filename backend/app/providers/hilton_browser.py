@@ -16,6 +16,7 @@ from app.providers.hilton_page import (
     verify_displayed_stay,
     verify_rooms_url,
 )
+from app.providers.retry_after import retry_after_seconds
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://www.hilton.com"
@@ -122,7 +123,7 @@ class HiltonBrowserProvider(AccorBrowserProvider):
     async def _open_via_home(self, page, request: RateRequest):
         self._booking_stage = "home navigation"
         response = await page.goto(ROOT + "/en/", wait_until="commit", timeout=45000)
-        await self._check_access(page, response.status if response else None)
+        await self._check_response(page, response)
         search = page.locator("#location-input")
         try:
             self._booking_stage = "hotel search input"
@@ -172,11 +173,20 @@ class HiltonBrowserProvider(AccorBrowserProvider):
             await self._check_access(page)
             raise
 
-    async def _check_access(self, page, status=None):
+    async def _check_response(self, page, response):
+        retry = None
+        if response is not None and response.status == 429:
+            try:
+                retry = retry_after_seconds(await response.header_value("retry-after"))
+            except BrowserError:
+                pass  # Preserve the known rejection when header retrieval is unavailable.
+        await self._check_access(page, response.status if response else None, retry_after=retry)
+
+    async def _check_access(self, page, status=None, retry_after=None):
         if status == 403:
             raise ProviderError(ErrorCode.BLOCKED_BY_ANTIBOT, "Hilton returned HTTP 403")
         if status == 429:
-            raise ProviderError(ErrorCode.RATE_LIMITED, "Hilton returned HTTP 429")
+            raise ProviderError(ErrorCode.RATE_LIMITED, "Hilton returned HTTP 429", retry_after=retry_after)
         if status is not None and status >= 400:
             raise ProviderError(ErrorCode.HTTP_ERROR, f"Hilton returned HTTP {status}")
         if "Hilton Page Reference Code" in await page.title():
@@ -191,7 +201,7 @@ class HiltonBrowserProvider(AccorBrowserProvider):
             # Code-only diagnostic calls retain the verified public deeplink;
             # real catalog-backed rate jobs have the official hotel name.
             response = await page.goto(rooms_url(request), wait_until="domcontentloaded", timeout=45000)
-            await self._check_access(page, response.status if response else None)
+            await self._check_response(page, response)
         try:
             self._booking_stage = "rooms summary"
             await page.get_by_test_id("search-edit-button").wait_for(state="attached", timeout=30000)
@@ -219,7 +229,7 @@ class HiltonBrowserProvider(AccorBrowserProvider):
             try:
                 page = await self._get_page()
                 response = await page.goto(url.geturl(), wait_until="domcontentloaded", timeout=45000)
-                await self._check_access(page, response.status if response else None)
+                await self._check_response(page, response)
                 await page.locator("h1").first.wait_for(state="visible", timeout=30000)
                 await self._check_access(page)
                 final = urlparse(page.url)

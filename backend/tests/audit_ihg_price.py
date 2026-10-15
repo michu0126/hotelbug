@@ -230,8 +230,8 @@ async def emit_public_stay_diagnostics(page, hotel_code=None):
 async def run_existing_price(
     sessions, queue, settings, emit=print, provider="ihg", target_job_id=None, allow_due_recheck=False
 ):
-    assert provider in {"ihg", "accor", "gha", "hilton"}, "Unsupported audit provider"
-    marker_key = "audit:directory-only" if provider == "ihg" else "audit:sitemap-catalog"
+    assert provider in {"ihg", "accor", "gha", "hilton", "marriott"}, "Unsupported audit provider"
+    marker_key = "audit:directory-only" if provider in {"ihg", "marriott"} else "audit:sitemap-catalog"
     async with sessions() as db:
         marker = await db.get(AppSetting, marker_key)
         assert marker and marker.value == {"provider": provider}, (

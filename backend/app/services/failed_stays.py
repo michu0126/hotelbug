@@ -1,7 +1,7 @@
 """Repair unobserved stays after exhausted transient failures, without fake scans."""
 
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +9,12 @@ from sqlalchemy.orm import aliased
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode
-from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, StayScan, utcnow
+from app.models.tables import CrawlJob, Hotel, ProviderStatus, StayScan, utcnow
 from app.schemas.domain import JobInput, JobKind
+from app.services.capacity import load_capacity
+from app.services.catalog_price_source import load_catalog_price_source
 from app.services.jobs import LIVE, enqueue, tier
+from app.services.revisit_rotation import fair_revisit_rows
 
 RATE_KINDS = (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY)
 TRANSIENT_FAILURES = (
@@ -23,7 +26,7 @@ TRANSIENT_FAILURES = (
 
 
 async def expand_failed_stays(
-    session: AsyncSession, settings: Settings, enabled: Sequence[str], budget: int
+    session: AsyncSession, settings: Settings, enabled: Sequence[str], budget: int, *, capacity=None
 ) -> int:
     """Only the latest exhausted attempt for a still-unobserved default stay.
 
@@ -32,6 +35,11 @@ async def expand_failed_stays(
     Permanent parser/install/access failures do not get blindly replayed here.
     """
     if budget < 1 or not enabled:
+        return 0
+    capacity = capacity or await load_capacity(session, settings)
+    enabled = [provider for provider in enabled if capacity.available_for(provider)]
+    budget = min(budget, capacity.available_for(*enabled))
+    if not enabled or budget < 1:
         return 0
     today, now = date.today(), utcnow()
     hot_end, warm_end = today + timedelta(days=30), today + timedelta(days=90)
@@ -102,33 +110,25 @@ async def expand_failed_stays(
             ~observed,
         )
     )
-    state = await session.get(AppSetting, "global_failed_stay_cursor")
-    value = dict(state.value) if state else {}
-    raw_time = value.get("created_at")
-    try:
-        cursor_time = datetime.fromisoformat(raw_time) if isinstance(raw_time, str) else None
-    except ValueError:
-        cursor_time = None
-    cursor_id = value.get("job_id", "")
-    if not isinstance(cursor_id, str):
-        cursor_id = ""
-    after = (
-        or_(
-            CrawlJob.created_at > cursor_time,
-            and_(CrawlJob.created_at == cursor_time, CrawlJob.id > cursor_id),
-        )
-        if cursor_time
-        else True
+    source = await load_catalog_price_source(session)
+    query = query.where(source.hotel_predicate())
+    rows, remember = await fair_revisit_rows(
+        session,
+        query,
+        CrawlJob,
+        providers=enabled,
+        key="global_failed_stay_cursor",
+        time_field="created_at",
+        id_field="job_id",
+        limit=budget * 4,
     )
-    ordered = query.order_by(CrawlJob.created_at, CrawlJob.id)
-    rows = (await session.execute(ordered.where(after).limit(budget * 4))).all()
-    if not rows and cursor_time is not None:
-        rows = (await session.execute(ordered.limit(budget * 4))).all()
     created = 0
     for failed, hotel in rows:
         if created >= budget:
             break
-        value = {"created_at": failed.created_at.isoformat(), "job_id": failed.id}
+        if not capacity.available_for(hotel.provider):
+            continue
+        remember(hotel.provider, {"created_at": failed.created_at.isoformat(), "job_id": failed.id})
         if (failed.check_out - failed.check_in).days != 1:
             continue
         temperature = tier((failed.check_in - today).days)
@@ -141,12 +141,9 @@ async def expand_failed_stays(
                 check_in=failed.check_in,
                 check_out=failed.check_out,
                 priority={"HOT": 80, "WARM": 60, "COLD": 40}[temperature],
-                payload={"adults": 2, "rooms": 1},
+                payload={"adults": 2, "rooms": 1, **source.payload(hotel.provider)},
             ),
         )
+        capacity.consume(hotel.provider)
         created += 1
-    if state:
-        state.value = value
-    elif rows:
-        session.add(AppSetting(key="global_failed_stay_cursor", value=value))
     return created

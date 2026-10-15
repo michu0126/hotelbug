@@ -11,6 +11,8 @@ from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, Watch
 from app.providers.registry import FACTORIES
 from app.schemas.domain import JobInput, JobKind
 from app.schemas.watchlists import SCOPES
+from app.services.capacity import load_capacity
+from app.services.catalog_price_source import load_catalog_price_source
 from app.services.jobs import LIVE, enqueue, tier
 from app.services.rechecks import expand_rechecks
 from app.services.watch_scopes import scoped_hotels
@@ -74,12 +76,9 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
     if budget < 1:
         return 0
     now = utcnow()
-    pending = await session.scalar(
-        select(func.count())
-        .select_from(CrawlJob)
-        .where(CrawlJob.status.in_(("PENDING", "QUEUED", "RUNNING")))
-    )
-    budget = min(budget, max(0, settings.max_pending_jobs - pending))
+    enabled = [name for name in FACTORIES if settings.provider_policy(name).enabled]
+    capacity = await load_capacity(session, settings)
+    budget = min(budget, capacity.available_for(*enabled))
     if not budget:
         return 0
     rotation = await session.get(AppSetting, "watchlist_rotation")
@@ -94,7 +93,6 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
         watches = (await session.scalars(query.order_by(Watchlist.id).limit(budget * 4))).all()
     if not watches:
         return 0
-    enabled = [name for name in FACTORIES if settings.provider_policy(name).enabled]
     created = 0
     for watch in watches:
         if created >= budget:
@@ -119,6 +117,8 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
             if hotel_cursor:
                 hotel_cursor.value = {"hotel_id": hotel.id}
             if not hotel.active or hotel.provider not in enabled:
+                continue
+            if not capacity.available_for(hotel.provider):
                 continue
             state = await session.get(ProviderStatus, hotel.provider)
             if state and state.blocked_until and state.blocked_until.replace(tzinfo=now.tzinfo) > now:
@@ -168,6 +168,7 @@ async def expand_watchlists(session: AsyncSession, settings: Settings, budget: i
                     priority=85,
                 ),
             )
+            capacity.consume(hotel.provider)
             created += 1
             break  # At most one job per watch per tick; a whole country cannot monopolize it.
     if rotation:
@@ -237,19 +238,23 @@ async def fair_frontier_hotels(session: AsyncSession, query, budget: int) -> lis
     return chosen
 
 
-async def expand_global(session: AsyncSession, settings: Settings) -> int:
+async def expand_global(
+    session: AsyncSession, settings: Settings, *, monthly_providers: tuple[str, ...] = ()
+) -> int:
     """Fair keyset rotation across all catalog hotels, with a persistent date cursor."""
     if not settings.global_monitoring_enabled:
         return 0
-    enabled = [name for name in FACTORIES if settings.provider_policy(name).enabled]
+    # A supported monthly lane scouts the whole date range and admits real
+    # room quotes only for low-price signals. Do not fill the same provider's
+    # queue with a parallel 365-single-stay frontier. Explicit watches are
+    # expanded separately and continue to request their chosen room quotes.
+    enabled = [
+        name for name in FACTORIES if settings.provider_policy(name).enabled and name not in monthly_providers
+    ]
     if not enabled:
         return 0
-    pending = await session.scalar(
-        select(func.count())
-        .select_from(CrawlJob)
-        .where(CrawlJob.status.in_(("PENDING", "QUEUED", "RUNNING")))
-    )
-    budget = min(settings.global_jobs_per_tick, max(0, settings.max_pending_jobs - pending))
+    capacity = await load_capacity(session, settings)
+    budget = min(settings.global_jobs_per_tick, capacity.available_for(*enabled))
     if not budget:
         return 0
     # Reserve at most half for revisiting known calendar dates; all spare slots
@@ -264,7 +269,7 @@ async def expand_global(session: AsyncSession, settings: Settings) -> int:
         else:
             session.add(AppSetting(key="global_single_slot_lane", value={"revisit_last": revisit}))
         recheck_budget = int(revisit)
-    created = await expand_rechecks(session, settings, enabled, recheck_budget)
+    created = await expand_rechecks(session, settings, enabled, recheck_budget, capacity=capacity)
     frontier_budget = budget - created
     if not frontier_budget:
         return created
@@ -283,9 +288,13 @@ async def expand_global(session: AsyncSession, settings: Settings) -> int:
             or_(ProviderStatus.blocked_until.is_(None), ProviderStatus.blocked_until <= now),
         )
     )
+    source = await load_catalog_price_source(session)
+    query = query.where(source.hotel_predicate())
     hotels = await fair_frontier_hotels(session, query, frontier_budget)
     for hotel in hotels:
         last_id = hotel.id
+        if not capacity.available_for(hotel.provider):
+            continue
         state = await session.get(ProviderStatus, hotel.provider)
         if state and state.blocked_until and state.blocked_until.replace(tzinfo=now.tzinfo) > now:
             continue
@@ -328,8 +337,10 @@ async def expand_global(session: AsyncSession, settings: Settings) -> int:
                 check_in=check_in,
                 check_out=check_in + timedelta(days=1),
                 priority={"HOT": 80, "WARM": 60, "COLD": 40}[temperature],
+                payload=source.payload(hotel.provider),
             ),
         )
+        capacity.consume(hotel.provider)
         created += 1
     if rotation:
         rotation.value = {"hotel_id": last_id}

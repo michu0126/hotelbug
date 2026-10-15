@@ -358,3 +358,49 @@ Army Hotels资料不代表普通旅客可订或报价验证；原目录图仍未
 工具持久记录这次边界尝试，不重建已结束条件，也不缩短失败重试截止或共享暂停。
 这是单家末端日期链路证据，不是365日期或全球目录已完成。新增14项离线边界回归，
 完整后端1219项通过（58.17秒）；未发布、更新NAS或发送Telegram。
+
+## 2026-10-08 avid 标题身份修复与原失败日期复测（本地，未部署）
+
+NAS原任务49936a00-d4a9-4c60-89d1-6cf163255394，IGMAV / avid hotels Kingman -
+Medical Center Area，2026-10-08/09、1房2成人，失败为IHG displayed hotel mismatch，
+读取时历史为空。通过正常Chrome详情页看到真正酒店标题在`#hotel-hero-left h2`，
+唯一H1却是“Welcome to avid hotels in Kingman, where the essentials are done right.
+Every time.”营销文案。正常日期/人数表单提交后，报价页明确酒店名为avid hotels
+Kingman - Medical Center Area，而详情hero使用avid hotel（单数）。
+
+现avidhotels品牌详情仅从唯一hero H1/H2读取酒店名并等该标题可见，不以任意营销
+H1代替；其他品牌原H1路径保留。报价页只兼容已观察的avid hotel / avid hotels
+单复数，剩余酒店全名必须完全相同，且同页官方评论链接的酒店代码及可选qSlH
+必须为请求代码。无房列表也保留唯一目标卡片及其官方酒店链接代码核验，不因
+名称别名放松日期、人数或身份。先以7个失败回归复现，再修正；新增19项身份/
+等待回归包含空/重复标题、错误代码/域名/查询、不同酒店、日期和人数。
+
+人工UI展开1 King Standard后关闭会员折扣，实际命名Best Flexible Rate为USD119，
+Double Bonus Package为USD124，不是摘要会员起价113；未点Select、不登录/下单。
+截图`work/ihg-avid-public-price-20261008.jpg`。13:00:28–29 UTC真实
+IHGBrowserProvider有头Chrome进一步返回3房型/2方案共6条USD119–134公开每晚
+cash_price，member_rate=false、total_price/tax未知，页面明确Non-refundable，
+refundable=false。报价校验成功，但随后context.close出现TargetClosedError，命令
+退出1，不能称为完整烟测通过。旧格式报告`work/ihg-igmav-live-20261008.json`
+的status=SUCCEEDED只反映采价阶段，不反映随后清理；原证据保留不重写。
+
+新增烟测现在分开持久记录quote_status、cleanup_status及最终status，任何阶段失败
+最终都为FAILED，独占创建报告防止覆盖旧证据；即使任务页清理失败仍关闭共享浏览器。
+不会写数据库或调用Telegram。已收到真实context close事件的会话不再次关闭context，
+仍回收browser/driver；未确认关闭的实际异常仍传播，不靠捕获所有异常伪装正常。
+此保护的离线失败回归先复现；独立有头临时资料/本地HTML关闭事件专项通过，
+hotel_requests=0、production_profiles=0。这不能倒推原TargetClosedError的唯一根因，
+也没有为重新验退出而重抓已成功的IGMAV价格。
+
+另一原失败任务f5d0af0b-bb8f-4c3d-907c-6e8bee1d4d2a，FLGLL / Holiday Inn Express
+Flagstaff，原为displayed stay dates mismatch。13:02:04–05 UTC以同一项目验证目录
+真实适配器查询2026-10-08/09、1房2成人，返回1 King Standard USD174、2 Queen Beds
+Standard USD174、Standard Room USD194，均公开Best Flexible Rate、非会员、每晚
+cash_price、refundable=false、tax/total_price未知。日期校验与清理均通过，命令退出0；
+证据`work/ihg-flgll-live-20261008.json`的quote_status/cleanup_status/status全为SUCCEEDED。
+原NAS日期错误本次未重现，不能认定新增标题修复解决了它的根因。未修改NAS历史/
+暂停、未写入生产库或TG、未发布或部署代码；不是全球全年或NAS任务入库验收。
+
+最终复查发现其他品牌首个H1解析不应被avid唯一hero规则收紧，已单独补回归并保留
+旧路径，新增失败先复现后修正。最终完整后端1331项通过（73.89秒，SQLite/FakeRedis
+隔离库）；全后端Ruff及173文件格式检查通过。此为本地结果，不替代NAS部署验收。

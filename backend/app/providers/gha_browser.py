@@ -146,7 +146,16 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
     upper_name = name.upper()
     if "DISCOVERY" in upper_name or ("MEMBER" in upper_name and "NON-MEMBER" not in upper_name):
         return None
-    prices = [h for h in headings if "/" in h.get_text() and "text-gold" not in h.get("class", [])]
+    # Hotel Palace Portoroz uses gold for an explicitly named "Public Ch"
+    # plan too. Colour alone is not a universal membership discriminator.
+    # Retain the old unknown-gold exclusion; only explicit public/non-member
+    # plan labels qualify for this observed additional layout.
+    explicitly_public = bool(re.search(r"\bPUBLIC\b|\bNON-MEMBER\b", upper_name))
+    prices = [
+        h
+        for h in headings
+        if "/" in h.get_text() and ("text-gold" not in h.get("class", []) or explicitly_public)
+    ]
     for price in prices:
         money = MONEY.fullmatch(price.get_text(" ", strip=True))
         if not money or "Including taxes and fees" not in price.parent.get_text(" ", strip=True):
@@ -156,6 +165,10 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
         # non-member plan may differ in either direction, including a bug price.
         if amount <= 0 or money[1] != room[1]:
             continue
+        # The newly observed gold-public layout's rate conditions list an
+        # additional service charge despite the generic inclusive card label.
+        # Record its visible amount, not an unverified all-fees final total.
+        displayed_only = "text-gold" in price.get("class", [])
         return RateData(
             **search.model_dump(),
             provider="gha",
@@ -163,7 +176,8 @@ def parse_public_offer(html: str, room: tuple[str, str, Decimal], search: RateRe
             room_code="name:" + name_key(room[0]),
             rate_name=name,
             rate_code="public-name:" + name_key(name),
-            total_price=amount,
+            cash_price=amount if displayed_only else None,
+            total_price=None if displayed_only else amount,
             currency=money[1],
             member_rate=False,
             availability=True,
@@ -341,9 +355,7 @@ class GHABrowserProvider(AccorBrowserProvider):
                         result[rate.offer_key()] = rate
                 await page.locator(".react-responsive-modal-closeButton:visible").click()
             if not result:
-                raise ProviderError(
-                    ErrorCode.PROVIDER_CHANGED, "No named GHA non-member tax-inclusive offers verified"
-                )
+                raise ProviderError(ErrorCode.PROVIDER_CHANGED, "No named GHA non-member offers verified")
             return list(result.values())
         except BrowserError as exc:
             raise ProviderError(

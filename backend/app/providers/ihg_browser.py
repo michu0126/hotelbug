@@ -1,6 +1,8 @@
 """IHG official hotel page -> date controls -> inline/expanded public room prices."""
 
+import asyncio
 import re
+import time
 from datetime import date, timedelta
 
 from playwright.async_api import Error as BrowserError
@@ -22,6 +24,7 @@ from app.providers.ihg_page import (
     hotel_search_unavailable,
     parse_hotel,
     parse_room,
+    property_heading_selector,
     property_identity,
     verify_booking,
     verify_displayed_stay,
@@ -60,7 +63,9 @@ class IHGBrowserProvider(AccorBrowserProvider):
         # DOMContentLoaded. Wait for the actual controls, not the whole-site event.
         response = await page.goto(official_url, wait_until="commit", timeout=45000)
         await self._check_access(page, response.status if response else None)
-        await page.locator("h1").first.wait_for(state="visible", timeout=30000)
+        await page.locator(property_heading_selector(official_url)).first.wait_for(
+            state="visible", timeout=30000
+        )
         await self._check_access(page)
         if property_identity(page.url)[4] != expected[4]:
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG hotel changed after navigation")
@@ -139,17 +144,34 @@ class IHGBrowserProvider(AccorBrowserProvider):
             ) from exc
 
     async def _choose_day(self, page, day: date):
-        cell = page.locator(f'[data-year="{day.year}"][data-month="{day.month}"][data-day="{day.day}"]')
+        dialog = page.get_by_role("dialog", name="Choose Date", exact=True)
+        await dialog.wait_for(state="visible", timeout=15000)
+        signature = await self._wait_calendar_grid(dialog)
+        cell = dialog.locator(
+            f'[data-year="{day.year}"][data-month="{day.month}"][data-day="{day.day}"]:visible'
+        )
         for _ in range(14):
             if await cell.count():
                 await cell.first.click()
                 return
-            await (
-                page.get_by_role("dialog", name="Choose Date", exact=True)
-                .get_by_role("button", name="Next", exact=True)
-                .click()
-            )
+            await dialog.get_by_role("button", name="Next", exact=True).click(timeout=15000)
+            signature = await self._wait_calendar_grid(dialog, previous=signature)
         raise ProviderError(ErrorCode.INVALID_RESPONSE, "IHG date outside displayed calendar")
+
+    async def _wait_calendar_grid(self, dialog, previous=None):
+        # The dialog/Next control can mount before the days. Likewise a month
+        # transition briefly retains its old grid. count() never auto-waits:
+        # treating that transient DOM as a missing date can skip its month.
+        deadline = time.monotonic() + 15
+        cells = dialog.locator("[data-year][data-month][data-day]:visible")
+        while time.monotonic() < deadline:
+            signature = await cells.evaluate_all(
+                "es => es.map(e => [e.dataset.year,e.dataset.month,e.dataset.day].join('-')).join(',')"
+            )
+            if signature and signature != previous:
+                return signature
+            await asyncio.sleep(0.1)
+        raise BrowserTimeout("IHG calendar grid did not finish rendering")
 
     async def _verify_stay(self, page, request, name):
         verify_booking(page.url, request)
@@ -166,12 +188,15 @@ class IHGBrowserProvider(AccorBrowserProvider):
         stage = "hotel page"
         try:
             page, hotel = await self._open_property(url)
-            stage = "stay dates"
+            stage = "open stay calendar"
             await page.locator("input.calendar-input").first.click()
+            stage = "check-in date"
             await self._choose_day(page, request.check_in)
+            stage = "check-out date"
             await self._choose_day(page, request.check_out)
             # Selecting checkout can leave the calendar panel open. Use the
             # normal outside click before opening the guest picker.
+            stage = "close stay calendar"
             await page.locator("h1").first.click()
             stage = "guest count"
             adults = page.get_by_test_id("adults-count-input")
