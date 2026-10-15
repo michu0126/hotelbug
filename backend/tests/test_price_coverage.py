@@ -93,6 +93,7 @@ async def test_tier_boundaries_and_successful_no_inventory_are_distinct_fresh_st
 async def test_scope_excludes_old_source_inactive_nondefault_multinight_expired_and_future_rows(sessions):
     async with sessions() as db, db.begin():
         db.add_all([hotel(), hotel("old", chinese=False), hotel("disabled", active=False)])
+        await db.flush()
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add(source_job(scan(1), CN_ROOT))
         db.add_all(
@@ -119,6 +120,7 @@ async def test_scope_excludes_old_source_inactive_nondefault_multinight_expired_
 async def test_changed_hotel_url_does_not_relabel_old_or_unknown_source_observations(sessions):
     async with sessions() as db, db.begin():
         db.add(hotel(chinese=True))  # Hotel was refreshed after the EN observations.
+        await db.flush()
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add_all([scan(1), scan(2), scan(3, status="UNAVAILABLE"), scan(4)])
         db.add(source_job(scan(1), EN_ROOT))
@@ -154,6 +156,7 @@ async def test_changed_hotel_url_does_not_relabel_old_or_unknown_source_observat
 async def test_enqueued_calendar_and_rate_jobs_do_not_count_as_observations(sessions):
     async with sessions() as db, db.begin():
         db.add(hotel())
+        await db.flush()
         for kind in (JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR):
             db.add(
                 CrawlJob(

@@ -17,6 +17,7 @@ async def test_calendar_shows_latest_hint_and_keeps_formal_availability_unknown(
     async with sessions() as db, db.begin():
         item = hotel()
         db.add(item)
+        await db.flush()
         db.add(AppSetting(key="catalog:marriott", value={"root": ROOT}))
         db.add_all([hint(age=2, displayed_price=900), hint(age=1, displayed_price=120, currency="EUR")])
         await db.flush()
@@ -35,6 +36,7 @@ async def test_hint_does_not_override_verified_no_inventory_and_source_switch_hi
     async with sessions() as db, db.begin():
         item = hotel()
         db.add(item)
+        await db.flush()
         source = AppSetting(key="catalog:marriott", value={"root": ROOT})
         db.add(source)
         db.add(hint())
@@ -64,6 +66,7 @@ async def test_view_clips_year_and_excludes_future_captures_or_wrong_conditions(
     async with sessions() as db, db.begin():
         item = hotel()
         db.add(item)
+        await db.flush()
         db.add(AppSetting(key="catalog:marriott", value={"root": ROOT}))
         db.add_all(
             [

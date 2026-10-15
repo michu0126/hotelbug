@@ -59,6 +59,7 @@ async def test_without_accepted_cn_source_counts_are_unknown_not_zero(sessions, 
         if root:
             db.add(AppSetting(key="catalog:marriott", value={"root": root, "requested_root": CN_ROOT}))
         db.add(hotel())
+        await db.flush()
         db.add(hint())
     async with sessions() as db:
         result = await calendar_hint_coverage_by_provider(db, Settings(), NOW)
@@ -87,6 +88,7 @@ async def test_hot_warm_cold_cutoffs_and_duplicate_history_use_latest_distinct_h
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add_all([hotel(), hotel("two")])
+        await db.flush()
         db.add_all(
             [
                 hint(0, age=30),
@@ -119,6 +121,7 @@ async def test_scope_excludes_inactive_old_source_wrong_conditions_and_out_of_wi
                 hotel("other", provider="ihg"),
             ]
         )
+        await db.flush()
         db.add_all(
             [
                 hint(),
@@ -158,6 +161,7 @@ async def test_jobs_stay_scans_and_room_offers_are_not_calendar_hints_and_vice_v
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add(hotel())
+        await db.flush()
         db.add(hint())
         db.add(
             CrawlJob(
@@ -210,6 +214,7 @@ async def test_newer_future_timestamp_does_not_hide_valid_past_observation(sessi
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add(hotel())
+        await db.flush()
         db.add_all([hint(0, age=10), hint(0, age=-1)])
     async with sessions() as db:
         row = (await calendar_hint_coverage_by_provider(db, Settings(), NOW))["marriott"]
@@ -220,6 +225,7 @@ async def test_configured_intervals_and_shanghai_midnight_are_used(sessions):
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add(hotel())
+        await db.flush()
         db.add(hint(1, age=3))
     async with sessions() as db:
         custom = (await calendar_hint_coverage_by_provider(db, Settings(hot_interval_hours=4), NOW))[
@@ -238,6 +244,7 @@ async def test_query_count_is_constant_and_no_history_rows_are_loaded_into_pytho
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add_all(hotel(str(index)) for index in range(50))
+        await db.flush()
         db.add_all(hint(index, hotel_id=str(index)) for index in range(50))
     async with sessions() as db:
         queries = []
@@ -265,6 +272,7 @@ async def test_catalog_api_returns_separate_hint_coverage(sessions, monkeypatch)
     async with sessions() as db, db.begin():
         db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
         db.add(hotel())
+        await db.flush()
         db.add(hint())
 
     async def dependency():

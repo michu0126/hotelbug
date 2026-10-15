@@ -112,3 +112,4 @@ jobs:
             michu0126/hotelbug:phase2-preview-${{ matrix.target }}-${{ github.sha }}
             ghcr.io/michu0126/hotelbug:${{ matrix.primary_tag }}
             ghcr.io/michu0126/hotelbug:phase2-preview-${{ matrix.target }}
+            ghcr.io/michu0126/hotelbug:phase2-preview-${{ matrix.target }}-${{ github.sha }}
