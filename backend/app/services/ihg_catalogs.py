@@ -79,6 +79,31 @@ async def request_directory_root(session, job) -> None:
     state.value = {**state.value, "requested_root": source, "requested_root_job_id": job.id}
 
 
+async def obsolete_directory_job(session, job) -> bool:
+    """Don't send queued old-origin work after an explicit root was accepted.
+
+    The latest requested root itself must still be allowed to establish a new
+    source. No accepted choice means legacy behavior remains unchanged.
+    """
+    if job.provider != "marriott" or job.kind != JobKind.DISCOVER_CATALOG:
+        return False
+    state = await session.get(AppSetting, "catalog:marriott")
+    data = state.value if state and isinstance(state.value, dict) else {}
+    from app.providers.marriott_cn_catalog import ROOT as CN_ROOT
+
+    default, normalize = directory_policy("marriott")
+    accepted = data.get("root")
+    if accepted not in (default, CN_ROOT):
+        return False
+    try:
+        source = normalize(job.payload.get("official_url", ""))
+    except Exception:
+        return False  # Preserve ordinary validation of malformed task inputs.
+    if job.id == data.get("requested_root_job_id") and source == data.get("requested_root"):
+        return False
+    return urlparse(source).hostname != urlparse(accepted).hostname
+
+
 async def catalog_state(session, provider="ihg"):
     root, _ = directory_policy(provider)
     key = "catalog:" + provider

@@ -26,8 +26,14 @@ from app.services.catalog_price_source import (
     automatic_price_source_changed,
     load_catalog_price_source,
 )
-from app.services.ihg_catalogs import directory_policy, persist_catalog, record_catalog_failure
+from app.services.ihg_catalogs import (
+    directory_policy,
+    obsolete_directory_job,
+    persist_catalog,
+    record_catalog_failure,
+)
 from app.services.jobs import backoff, cancel_outside_window, within_monitoring_window
+from app.services.official_connections import load_connection
 from app.services.provider_health import scheduled_probe_cancellation
 from app.services.queue import Queue
 from app.services.rates import finalize_stay_scan, persist_rates, upsert_hotel
@@ -162,6 +168,29 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
             job.status = "CANCELLED"
             job.error_message = "Provider disabled by configuration"
             return True
+        if await obsolete_directory_job(session, job):
+            job.status = "CANCELLED"
+            job.error_message = (
+                (job.error_message + "; ") if job.error_message else ""
+            ) + "Official directory source changed"
+            job.lease_owner, job.lease_until = None, None
+            return True
+        if job.payload.get("connection_test") is True:
+            try:
+                connection = await asyncio.to_thread(
+                    load_connection, settings.browser_session_dir, job.provider
+                )
+            except ValueError:
+                connection = None
+            if (
+                not connection
+                or not connection.get("enabled")
+                or connection.get("revision") != job.payload.get("official_session_revision")
+            ):
+                job.status = "CANCELLED"
+                job.error_message = "Official connection changed; submit a new quote test"
+                job.lease_owner, job.lease_until = None, None
+                return True
         hotel = await session.get(Hotel, job.hotel_id) if job.hotel_id else None
         if await automatic_price_source_changed(session, job, hotel):
             # Retire only newly marked automatic work. Existing unmarked jobs,
@@ -301,6 +330,16 @@ async def finish_claimed_job(sessions, queue, settings, job, hotel, owner, polic
         current = await session.scalar(select(CrawlJob).where(CrawlJob.id == job_id).with_for_update())
         if current.lease_owner != owner:
             return True
+        if await obsolete_directory_job(session, current):
+            # A source switch while this request was in flight must not let an
+            # obsolete origin's response overwrite active-source group health.
+            current.status = "CANCELLED"
+            if error:
+                await record_catalog_failure(session, current, error, settings)
+                current.error_type = error.code.value
+            current.error_message = "Official directory source changed during request"
+            current.lease_owner, current.lease_until = None, None
+            return True
         state = await session.scalar(
             select(ProviderStatus).where(ProviderStatus.provider == job.provider).with_for_update()
         )
@@ -423,9 +462,10 @@ async def finish_claimed_job(sessions, queue, settings, job, hotel, owner, polic
                 )
                 if job.kind == JobKind.VERIFY_ANOMALY:
                     await confirm_job_drops(session, job, result)
-                else:
+                elif job.payload.get("connection_test") is not True:
                     await detect_drops(session, hotel, result, settings)
-                await match_calendar_candidates(session, hotel, job, result)
+                if job.payload.get("connection_test") is not True:
+                    await match_calendar_candidates(session, hotel, job, result)
             state.status = (
                 (state.status if state.status == "ONLINE" else "DEGRADED")
                 if job.kind == JobKind.FETCH_CALENDAR_HINTS

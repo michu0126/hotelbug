@@ -13,6 +13,7 @@ from playwright.async_api import TimeoutError as BrowserTimeout
 from playwright.async_api import async_playwright
 
 from app.core.errors import ErrorCode, ProviderError
+from app.services.official_connections import load_connection
 
 _sessions = {}
 _locks = {}
@@ -76,6 +77,7 @@ class BrowserSession:
     closed: bool = False
     last_used: float = 0
     idle_page: object | None = None
+    cookie_revision: str | None = None
 
     def touch(self, *_):
         self.last_used = time.monotonic()
@@ -165,6 +167,32 @@ async def new_provider_page(
                 if isinstance(exc, (BrowserError, OSError)):
                     raise startup_error(exc) from exc
                 raise
+        try:
+            connection = await asyncio.to_thread(load_connection, session_dir, provider)
+        except ValueError:
+            raise ProviderError(
+                ErrorCode.BROWSER_UNAVAILABLE, "Saved official connection could not be read; save it again"
+            ) from None
+        if connection and connection["revision"] != runtime.cookie_revision:
+            # Do not replace account/session cookies under another live request.
+            if any(page is not runtime.idle_page for page in runtime.context.pages):
+                raise ProviderError(
+                    ErrorCode.BROWSER_STARTUP_FAILED,
+                    "Official connection update is waiting for active browser tasks",
+                )
+            try:
+                for name, domain, path in connection.get("owned_keys", []):
+                    await runtime.context.clear_cookies(name=name, domain=domain, path=path)
+                if connection.get("enabled"):
+                    now = time.time()
+                    cookies = [c for c in connection["cookies"] if c.get("expires", now + 1) > now]
+                    await runtime.context.add_cookies(cookies)
+                runtime.cookie_revision = connection["revision"]
+            except BrowserError:
+                raise ProviderError(
+                    ErrorCode.BROWSER_UNAVAILABLE,
+                    "Official Cookie connection could not be applied; check its format",
+                ) from None
         page = await runtime.context.new_page()
         runtime.touch()
         page.on("close", runtime.touch)

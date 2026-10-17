@@ -11,6 +11,7 @@ from app.providers.marriott_catalog import ROOT as EN_ROOT
 from app.providers.marriott_cn_catalog import ROOT as CN_ROOT
 from app.schemas.domain import CatalogPageData, JobKind
 from app.services.ihg_catalogs import (
+    obsolete_directory_job,
     persist_catalog,
     record_catalog_failure,
     request_directory_root,
@@ -125,3 +126,85 @@ async def test_api_reports_selected_source_counts_only(sessions):
             assert row["catalog_coverage_complete"] is False
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_accepted_source_retires_old_origin_but_allows_latest_new_request(sessions):
+    async with sessions() as db, db.begin():
+        task = job(CN_ROOT, "cn-current")
+        await request_directory_root(db, task)
+        await finish(db, task)
+        assert await obsolete_directory_job(db, job(EN_ROOT, "old-en"))
+        assert not await obsolete_directory_job(db, job(CN_ROOT, "cn-refresh"))
+        latest = job(EN_ROOT, "explicit-latest-en")
+        await request_directory_root(db, latest)
+        assert not await obsolete_directory_job(db, latest)
+        assert await obsolete_directory_job(db, job(EN_ROOT, "old-en"))
+
+
+async def test_worker_skips_old_origin_before_pause_and_browser_without_erasing_evidence(
+    sessions, queue, monkeypatch
+):
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from app.crawler import worker
+    from app.models.tables import CrawlJob, ProviderStatus, utcnow
+    from app.schemas.domain import JobInput
+    from app.services.jobs import enqueue
+
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+    execute = AsyncMock()
+    monkeypatch.setattr(worker, "execute", execute)
+    pause = utcnow() + timedelta(hours=6)
+    async with sessions() as db, db.begin():
+        db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
+        db.add(ProviderStatus(provider="marriott", status="BLOCKED", blocked_until=pause))
+        row = await enqueue(
+            db,
+            JobInput(provider="marriott", kind=JobKind.DISCOVER_CATALOG, payload={"official_url": EN_ROOT}),
+        )
+        row.error_type, row.error_message, row.retry_count = "TIMEOUT", "prior timeout", 2
+        identity = row.id
+    await queue.put(identity, 70)
+    assert await worker.process_one(sessions, queue, Settings())
+    execute.assert_not_awaited()
+    async with sessions() as db:
+        row = await db.get(CrawlJob, identity)
+        assert row.status == "CANCELLED" and row.retry_count == 2 and row.error_type == "TIMEOUT"
+        assert "prior timeout" in row.error_message
+        state = await db.get(ProviderStatus, "marriott")
+        assert state.blocked_until.replace(tzinfo=pause.tzinfo) == pause
+
+
+async def test_old_origin_inflight_failure_does_not_block_new_source(sessions, queue, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.crawler import worker
+    from app.models.tables import CrawlJob, ProviderStatus
+    from app.schemas.domain import JobInput
+    from app.services.jobs import enqueue
+
+    monkeypatch.setenv("MARRIOTT_ENABLED", "true")
+    async with sessions() as db, db.begin():
+        db.add(AppSetting(key="catalog:marriott", value={"root": EN_ROOT}))
+        db.add(ProviderStatus(provider="marriott", status="ONLINE"))
+        row = await enqueue(
+            db,
+            JobInput(provider="marriott", kind=JobKind.DISCOVER_CATALOG, payload={"official_url": EN_ROOT}),
+        )
+        identity = row.id
+
+    async def changed(*args, **kwargs):
+        async with sessions() as db, db.begin():
+            state = await db.get(AppSetting, "catalog:marriott")
+            state.value = {"root": CN_ROOT}
+        raise ProviderError(ErrorCode.BLOCKED_BY_ANTIBOT, "Old origin denied")
+
+    monkeypatch.setattr(worker, "execute", AsyncMock(side_effect=changed))
+    await queue.put(identity, 70)
+    assert await worker.process_one(sessions, queue, Settings())
+    async with sessions() as db:
+        row = await db.get(CrawlJob, identity)
+        assert row.status == "CANCELLED" and row.error_type == "BLOCKED_BY_ANTIBOT"
+        state = await db.get(ProviderStatus, "marriott")
+        assert state.status == "ONLINE" and state.blocked_until is None and state.failure_count == 0

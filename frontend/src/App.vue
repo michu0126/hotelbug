@@ -8,6 +8,7 @@ import WatchlistPanel from './WatchlistPanel.vue';
 import IhgSitemapProgress from './IhgSitemapProgress.vue';
 import MarriottDirectorySource from './MarriottDirectorySource.vue';
 import PriceCoverage from './PriceCoverage.vue';
+import OfficialConnections from './OfficialConnections.vue';
 import {catalogCoverage} from './catalogCoverage.js';
 const watchRevision=ref(0);
 const status=ref(null),providers=ref([]),catalogs=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
@@ -186,6 +187,7 @@ onUnmounted(()=>clearInterval(timer));
       </div>
       <p v-else-if="!hotels.length" class="empty">尚未收录酒店。</p>
     </section>
+    <OfficialConnections :admin-token="adminToken" :request="api" :hotels="hotels" :group-names="names" @changed="refresh"/>
     <HistoryPanel :hotel-id="hotelId" v-model:check-in="historyDate" :preferred-offer="historyOffer"/>
     <WatchlistPanel :admin-token="adminToken" :group-names="names" :request="api" :revision="watchRevision" @changed="refresh"/>
     <AlertPanel :alerts="alerts" :group-names="names"/>

@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.connections import connection_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.database.session import get_session
@@ -94,6 +95,10 @@ def admin(authorization: Annotated[str | None, Header()] = None) -> None:
 
 def encode(row) -> dict:
     return jsonable_encoder({column.name: getattr(row, column.name) for column in row.__table__.columns})
+
+
+# Cookie inputs never enter generic settings or job payloads.
+app.include_router(connection_router(admin))
 
 
 class TelegramSettingsInput(BaseModel):

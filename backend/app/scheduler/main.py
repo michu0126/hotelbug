@@ -17,7 +17,7 @@ from app.services.calendar_hint_jobs import expand_calendar_hints
 from app.services.calendar_hints import admit_calendar_candidates, hint_month_current
 from app.services.catalog_price_source import load_catalog_price_source
 from app.services.catalogs import discover_accor, discover_gha, discover_hilton
-from app.services.ihg_catalogs import discover_hyatt, discover_marriott
+from app.services.ihg_catalogs import discover_hyatt, discover_marriott, obsolete_directory_job
 from app.services.ihg_sitemaps import discover_ihg_global
 from app.services.jobs import (
     cancel_outside_window,
@@ -76,6 +76,13 @@ async def tick(sessions: async_sessionmaker, queue: Queue, settings: Settings) -
             dispatched = 0
             eligible = []
             for job, effective_priority in rows:
+                if await obsolete_directory_job(session, job):
+                    job.status = "CANCELLED"
+                    job.error_message = (
+                        (job.error_message + "; ") if job.error_message else ""
+                    ) + "Official directory source changed"
+                    job.lease_owner, job.lease_until = None, None
+                    continue
                 if job.kind == JobKind.FETCH_CALENDAR_HINTS and not hint_month_current(job):
                     cancel_outside_window(job)
                     continue
