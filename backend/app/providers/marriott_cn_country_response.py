@@ -37,6 +37,7 @@ SORT = {
         {"field": field, "direction": "ASC"} for field in ("DISTANCE", "CITY", "BRAND", "PROPERTY_NAME")
     ]
 }
+DISTANCE_SORT = {"fields": [{"field": "DISTANCE", "direction": "ASC"}]}
 
 
 def parse_country_response(request: dict, response: dict, source: str) -> CatalogPageData:
@@ -66,7 +67,10 @@ def parse_country_response(request: dict, response: dict, source: str) -> Catalo
             or variables["limit"] != LIMIT
             or type(variables["offset"]) is not int
             or variables["offset"] != offset
-            or variables["sort"] != SORT
+            # The normal directory now sends just DISTANCE ASC (observed
+            # 2026-10-18); older sessions sent the four-field tie-break chain.
+            # Both are ordering only, not a country/brand/date filter.
+            or variables["sort"] not in (SORT, DISTANCE_SORT)
             or set(search) != {"options", "facets"}
             or options != {"customerId": "", "numberInParty": 1}
             or type(options["numberInParty"]) is not int

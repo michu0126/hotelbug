@@ -203,6 +203,34 @@ def test_response_graphql_errors_cannot_be_hidden_by_complete_looking_edges():
         parse_country_response(request, response, source)
 
 
+@pytest.mark.parametrize("index,total", [(0, 34), (0, 855), (1, 855), (21, 855)])
+def test_current_official_distance_only_sort_keeps_complete_page_and_offsets(index, total):
+    # Normal Chrome BT directory on 2026-10-18 returned two real identities
+    # with this one-field sort, not the historical four-field tie-break chain.
+    request, response, _, source = observed(country="CN" if total == 855 else "TW", index=index, total=total)
+    request["variables"]["sort"] = {"fields": [{"field": "DISTANCE", "direction": "ASC"}]}
+    result = parse_country_response(request, response, source)
+    assert result.page_complete is True
+    assert len(result.hotels) == min(40, total - index * 40)
+    assert len(result.directory_urls) == int((index + 1) * 40 < total)
+
+
+@pytest.mark.parametrize(
+    "sort",
+    [
+        {"fields": [{"field": "DISTANCE", "direction": "DESC"}]},
+        {"fields": [{"field": "PRICE", "direction": "ASC"}]},
+        {"fields": []},
+        {"fields": [{"field": "DISTANCE", "direction": "ASC"}], "country": "SG"},
+    ],
+)
+def test_unobserved_or_filter_bearing_sort_still_rejected(sort):
+    request, response, _, source = observed()
+    request["variables"]["sort"] = sort
+    with pytest.raises(ProviderError):
+        parse_country_response(request, response, source)
+
+
 @pytest.mark.parametrize(
     "field,value", [("nextOffset", 79), ("previousOffset", 1), ("hasPreviousPage", False)]
 )
