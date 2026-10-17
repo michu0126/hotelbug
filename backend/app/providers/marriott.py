@@ -171,13 +171,13 @@ class MarriottProvider(HotelProvider):
     def __init__(self, client: httpx.AsyncClient | None = None):
         self.client = client or httpx.AsyncClient(timeout=30, follow_redirects=False)
 
-    async def _query(self, kind: str, variables: dict) -> tuple[dict, str]:
+    @staticmethod
+    def query_request(kind: str, variables: dict) -> dict:
+        """Observed non-secret contract, shared by HTTP and browser-session API."""
         operation, signature = OPERATIONS[kind]
-        response = await request(
-            self.client,
-            "POST",
-            f"{ROOT}/mi/query/{operation}",
-            headers={
+        return {
+            "url": f"{ROOT}/mi/query/{operation}",
+            "headers": {
                 "accept": "*/*",
                 "accept-language": "en-US",
                 "content-type": "application/json",
@@ -190,11 +190,21 @@ class MarriottProvider(HotelProvider):
                 "graphql-require-safelisting": "true",
                 "referer": ROOT + "/reservation/rateListMenu.mi",
             },
-            json={
+            "json": {
                 "operationName": operation,
                 "variables": variables,
                 "query": (QUERIES / f"marriott_{kind}.graphql").read_text(encoding="utf-8"),
             },
+        }
+
+    async def _query(self, kind: str, variables: dict) -> tuple[dict, str]:
+        spec = self.query_request(kind, variables)
+        response = await request(
+            self.client,
+            "POST",
+            spec["url"],
+            headers=spec["headers"],
+            json=spec["json"],
         )
         if response.is_redirect:
             raise ProviderError(ErrorCode.TOKEN_EXPIRED, "Marriott session redirect")
@@ -218,34 +228,33 @@ class MarriottProvider(HotelProvider):
         data, _ = await self._query("hotel", {"propertyId": code})
         return parse_hotel(data, code)
 
-    async def search_rates(self, search: RateRequest) -> list[RateData]:
+    @staticmethod
+    def rate_variables(search: RateRequest) -> dict:
         if search.rooms != 1 or (search.check_out - search.check_in).days != 1:
             raise invalid("Only single-room single-night Marriott quotes are verified")
-        data, digest = await self._query(
-            "rates",
-            {
-                "search": {
-                    "propertyId": hotel_code(search.provider_hotel_id),
-                    "options": {
-                        "startDate": search.check_in.isoformat(),
-                        "endDate": search.check_out.isoformat(),
-                        "quantity": search.rooms,
-                        "numberInParty": search.adults,
-                        "childAges": [],
-                        "productRoomType": ["ALL"],
-                        "productStatusType": ["AVAILABLE"],
-                        "rateRequestTypes": [
-                            {"value": "", "type": t} for t in ("STANDARD", "PREPAY", "PACKAGES")
-                        ]
-                        + [{"value": "MRM", "type": "CLUSTER"}],
-                        "isErsProperty": False,
-                        "disabilityRequest": "ACCESSIBLE_AND_NON_ACCESSIBLE",
-                    },
+        return {
+            "search": {
+                "propertyId": hotel_code(search.provider_hotel_id),
+                "options": {
+                    "startDate": search.check_in.isoformat(),
+                    "endDate": search.check_out.isoformat(),
+                    "quantity": search.rooms,
+                    "numberInParty": search.adults,
+                    "childAges": [],
+                    "productRoomType": ["ALL"],
+                    "productStatusType": ["AVAILABLE"],
+                    "rateRequestTypes": [{"value": "", "type": t} for t in ("STANDARD", "PREPAY", "PACKAGES")]
+                    + [{"value": "MRM", "type": "CLUSTER"}],
+                    "isErsProperty": False,
+                    "disabilityRequest": "ACCESSIBLE_AND_NON_ACCESSIBLE",
                 },
-                "offset": 0,
-                "limit": 150,
             },
-        )
+            "offset": 0,
+            "limit": 150,
+        }
+
+    async def search_rates(self, search: RateRequest) -> list[RateData]:
+        data, digest = await self._query("rates", self.rate_variables(search))
         return parse_rates(data, search, digest)
 
     async def get_calendar_rates(self, search: RateRequest) -> list[RateData]:

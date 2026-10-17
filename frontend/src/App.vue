@@ -10,6 +10,10 @@ import MarriottDirectorySource from './MarriottDirectorySource.vue';
 import PriceCoverage from './PriceCoverage.vue';
 import OfficialConnections from './OfficialConnections.vue';
 import {catalogCoverage} from './catalogCoverage.js';
+import CollectionOverview from './CollectionOverview.vue';
+import {dashboardTabs} from './dashboardView.js';
+const activeView=ref('overview');
+const connectionsRef=ref(null);
 const watchRevision=ref(0);
 const status=ref(null),providers=ref([]),catalogs=ref([]),jobs=ref([]),hotels=ref([]),watches=ref([]),alerts=ref([]),calendar=ref(null);
 const error=ref(''),actionMessage=ref(''),loading=ref(false),actionBusy=ref(false);
@@ -127,7 +131,7 @@ async function loadMonitoringSettings(){
   }catch(e){monitoringMessage.value=e.message;}
 }
 async function loadManagementSettings(){
-  await Promise.all([loadTelegramSettings(),loadMonitoringSettings()]);
+  await Promise.all([loadTelegramSettings(),loadMonitoringSettings(),connectionsRef.value?.load()]);
 }
 async function saveMonitoringSettings(){
   if(!monitoring.value)return;
@@ -160,18 +164,22 @@ onMounted(()=>{refresh().then(loadCalendar);timer=setInterval(()=>{refresh().the
 onUnmounted(()=>clearInterval(timer));
 </script>
 <template>
-  <header><div><span class="eyebrow">SELF-HOSTED · HOTEL PRICE MONITOR</span><h1>Hotel Bug Price Monitor</h1><p>酒店官网价格日历与降价提醒</p></div><button @click="refresh" :disabled="loading">{{loading?'刷新中…':'刷新状态'}}</button></header>
+  <header><div><span class="eyebrow">HOTELBUG · OFFICIAL RATES</span><h1>酒店低价雷达</h1><p>全球酒店 · 未来一年 · 降价提醒</p></div><button @click="refresh" :disabled="loading">{{loading?'刷新中…':'刷新状态'}}</button></header>
   <main>
+    <nav class="dashboard-nav" aria-label="页面导航"><button v-for="tab in dashboardTabs" :key="tab.id" :aria-current="activeView===tab.id?'page':undefined" :class="{active:activeView===tab.id}" @click="activeView=tab.id">{{tab.label}}</button></nav>
     <p v-if="error" role="alert" class="notice error">{{error}}</p>
-    <p class="notice">官网采集正在逐集团验证。{{status?.global_monitoring_enabled===false?'全球轮询已关闭，已设置的酒店监控仍可运行。':'已收录酒店按未来一年轮询。'}}同条件价格较历史基准下降 {{Math.round(Number(status?.alert_drop_fraction??0.5)*100)}}% 时自动复查，确认后通过 Telegram 通知。历史基准至少需要 {{status?.alert_min_history_days??3}} 天记录。</p>
-    <p v-if="status?.message" class="muted">{{status.message}}</p>
+    <template v-if="activeView==='overview'">
+    <p class="overview-caption">{{status?.global_monitoring_enabled===false?'全球轮询已关闭，已关注酒店仍可监控。':'后台自动发现酒店，轮询未来 365 天。'}}同条件降价 {{Math.round(Number(status?.alert_drop_fraction??0.5)*100)}}% 后独立复查再通知。</p>
     <section class="cards"><article><small>酒店库</small><strong>{{status?.hotels??'—'}}</strong></article><article><small>今日采集报价</small><strong>{{status?.rates_today??'—'}}</strong></article><article><small>待处理任务</small><strong>{{status?.queued_jobs??'—'}}</strong></article><article><small>已确认异常</small><strong>{{status?.confirmed_alerts??'—'}}</strong></article></section>
-    <section class="panel"><h2>酒店与价格日历</h2><p class="muted">启用对应集团并设置管理令牌后可提交任务。全球酒店资料由下方官网目录自动发现，无需逐家手工添加；单酒店入口用于补充资料。开发机验证与当前部署的实际收录、报价数分开统计。</p>
-      <div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="仅保存在此页面内存" @blur="loadManagementSettings"></label><label>酒店集团<select v-model="selectedProvider"><option value="accor">雅高</option><option value="gha">GHA</option><option value="marriott">万豪（中文官网样本已验证）</option><option value="ihg">IHG（官网样本已验证）</option><option value="hilton">希尔顿（实验）</option><option value="hyatt">凯悦（独立采集待验证）</option></select></label><label v-if="needsOfficialUrl">{{selectedProvider==='hyatt'?'凯悦官网酒店详情链接':'官网英文酒店详情链接'}}<input v-model="officialUrl" type="url" :placeholder="selectedProvider==='hyatt'?'https://www.hyatt.com/…/zh-CN/酒店代码-名称':'https://www.ihg.com/…/hoteldetail'"></label><label v-else>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="雅高 0338 / GHA 10624"></label><button class="primary" :disabled="actionBusy" @click="discover">添加酒店资料</button></div>
-      <p v-if="selectedProvider==='hyatt'" class="muted">凯悦全球列表目录与中文单晚报价解析已接入，独立 Worker 仍待验证；正常浏览器目录可读不等于自动采价成功。详情入口支持官网新旧格式及合作品牌，特殊预订页尚未验收；运行结果以实际酒店和报价入库为准。</p>
+    <CollectionOverview :providers="providers" :catalogs="catalogs" :names="names" @settings="activeView='settings'"/>
+    <AlertPanel :alerts="alerts" :group-names="names"/>
+    <details class="advanced-section"><summary>管理关注范围</summary><WatchlistPanel :admin-token="adminToken" :group-names="names" :request="api" :revision="watchRevision" @changed="refresh"/></details>
+    </template>
+    <section v-show="activeView==='settings'" class="panel"><h2>管理访问</h2><p class="muted">查看价格无需令牌；修改采集、Cookie 或通知设置时填写。只保存在本页内存。</p><div class="fields"><label>管理令牌<input v-model="adminToken" type="password" autocomplete="off" placeholder="管理令牌" @blur="loadManagementSettings"></label><button :disabled="!adminToken" @click="loadManagementSettings">读取设置</button></div></section>
+    <section v-show="activeView==='calendar'" class="panel"><h2>价格日历</h2><p class="muted">搜索酒店查看报价，选择日期查看历史。手动采集和关注需先在设置中填写管理令牌。</p>
       <div class="fields"><label>搜索已收录的全球酒店<input v-model="hotelSearch" placeholder="酒店名称、国家、城市或品牌" @keyup.enter="searchHotels"></label><button :disabled="loading" @click="searchHotels">搜索酒店</button><small>最多显示 100 个匹配结果，输入关键词查找其他酒店</small></div>
-      <div class="fields"><label>酒店<select v-model="hotelId"><option value="">请选择</option><option v-for="h in hotels" :key="h.id" :value="h.id">{{h.hotel_name}} · {{h.city||h.provider_hotel_id}}</option></select></label><label>月份<input v-model="month" type="month"></label><button class="primary" :disabled="actionBusy||!hotelId" @click="crawlMonth">采集本月报价</button></div>
-      <div class="fields"><label>自动监控未来天数<select v-model="daysAhead"><option :value="30">30 天</option><option :value="90">90 天</option><option :value="365">365 天</option></select></label><button class="primary" :disabled="actionBusy||!hotelId" @click="watchHotel">保存自动监控</button><small>完整监控范围及状态见下方列表</small></div>
+      <div class="fields"><label>酒店<select v-model="hotelId"><option value="">请选择</option><option v-for="h in hotels" :key="h.id" :value="h.id">{{h.hotel_name}} · {{h.city||h.provider_hotel_id}}</option></select></label><label>月份<input v-model="month" type="month"></label><button class="primary" :disabled="actionBusy||!hotelId||!adminToken" @click="crawlMonth">采集本月报价</button></div>
+      <div class="fields"><label>自动监控未来天数<select v-model="daysAhead"><option :value="30">30 天</option><option :value="90">90 天</option><option :value="365">365 天</option></select></label><button class="primary" :disabled="actionBusy||!hotelId||!adminToken" @click="watchHotel">关注这家酒店</button></div>
       <p v-if="actionMessage" role="status" class="notice">{{actionMessage}}</p>
       <div v-if="calendar" class="calendar">
         <article v-for="d in calendarDays" :key="d.date" class="day">
@@ -187,11 +195,14 @@ onUnmounted(()=>clearInterval(timer));
       </div>
       <p v-else-if="!hotels.length" class="empty">尚未收录酒店。</p>
     </section>
-    <OfficialConnections :admin-token="adminToken" :request="api" :hotels="hotels" :group-names="names" @changed="refresh"/>
-    <HistoryPanel :hotel-id="hotelId" v-model:check-in="historyDate" :preferred-offer="historyOffer"/>
-    <WatchlistPanel :admin-token="adminToken" :group-names="names" :request="api" :revision="watchRevision" @changed="refresh"/>
+    <div v-show="activeView==='calendar'"><HistoryPanel :hotel-id="hotelId" v-model:check-in="historyDate" :preferred-offer="historyOffer"/></div>
+    <div v-show="activeView==='notifications'">
+    <section class="panel"><h2>Telegram 降价通知</h2><p class="muted">同条件价格下降 {{Math.round(Number(status?.alert_drop_fraction??0.5)*100)}}%，积累至少 {{status?.alert_min_history_days??3}} 天历史并复查后推送。先在设置中填写管理令牌；Token 留空保留原值。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token" @input="telegramDirty=true"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID" @input="telegramDirty=true"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy||!adminToken" @click="saveTelegram">保存通知设置</button><button :disabled="actionBusy||!adminToken||!telegramConfigured||telegramDirty" @click="testTelegram">发送测试消息</button><small>{{telegramConfigured?'已配置':'尚未读取或配置'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
     <AlertPanel :alerts="alerts" :group-names="names"/>
-    <section class="panel"><h2>Telegram 通知设置</h2><p class="muted">填写上面的管理令牌后保存；机器人 Token 留空表示保留已保存的值。保存后可手动发送一条测试消息。</p><div class="fields"><label>机器人 Token<input v-model="telegramBotToken" type="password" autocomplete="off" placeholder="BotFather 提供的 Token" @input="telegramDirty=true"></label><label>Chat ID<input v-model="telegramChatId" autocomplete="off" placeholder="接收消息的 Chat ID" @input="telegramDirty=true"></label><label>启用通知<input v-model="telegramEnabled" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveTelegram">保存 Telegram 设置</button><button :disabled="actionBusy||!telegramConfigured||telegramDirty" @click="testTelegram">发送测试消息</button><small>{{telegramConfigured?'已配置':'尚未在此页面保存'}}</small></div><p v-if="telegramMessage" role="status" class="notice">{{telegramMessage}}</p></section>
+    </div>
+    <div v-show="activeView==='settings'">
+    <OfficialConnections ref="connectionsRef" :admin-token="adminToken" :request="api" :hotels="hotels" :group-names="names" @changed="refresh"/>
+    <details class="advanced-section"><summary>高级采集设置</summary>
     <section class="panel"><h2>后台服务</h2><p>Worker 心跳：{{when(status?.worker_heartbeat)}}</p><p>Scheduler 心跳：{{when(status?.scheduler_heartbeat)}}</p><small>心跳只表示进程在线。请以 Provider 状态和实际报价为准。</small></section>
     <section class="panel"><h2>自动采集设置</h2><p class="muted">填写管理令牌后读取设置。监测范围固定为未来 365 天，时区内置为 Asia/Shanghai。页面设置优先于环境变量，保存后无需重建容器；关闭集团不会删除酒店或历史价格。</p><button :disabled="actionBusy||!adminToken" @click="loadMonitoringSettings">读取已保存设置</button>
       <template v-if="monitoring">
@@ -202,13 +213,17 @@ onUnmounted(()=>clearInterval(timer));
         <div class="fields"><label>采集 HTTP 代理<input v-model="browserProxy" type="password" autocomplete="off" :disabled="clearBrowserProxy" placeholder="http://192.168.50.4:7890（留空保留）"><small>当前：{{monitoring.browser_proxy_display||'未设置，使用容器网络'}}</small></label><label>清除采集代理<input v-model="clearBrowserProxy" type="checkbox"></label><label>Telegram 专用 HTTP 代理<input v-model="telegramProxy" type="password" autocomplete="off" :disabled="clearTelegramProxy" placeholder="留空保留；未设置时沿用采集代理"><small>当前：{{monitoring.telegram_proxy_display||'沿用采集代理或容器网络'}}</small></label><label>清除 Telegram 专用代理<input v-model="clearTelegramProxy" type="checkbox"></label><button class="primary" :disabled="actionBusy" @click="saveMonitoringSettings">保存自动采集设置</button></div>
       </template><p v-if="monitoringMessage" role="status" class="notice">{{monitoringMessage}}</p>
     </section>
-    <section class="panel"><h2>Provider 状态</h2><div class="providers"><article v-for="p in providers" :key="p.provider"><h3>{{names[p.provider]}}</h3><span class="badge">{{p.implemented?(p.enabled?p.status:'已关闭 · '+p.status):'待研究 / 尚未实现'}}</span><p>{{p.last_error||p.verification}}</p><small>今日任务 {{p.requests_today||0}} · 成功 {{p.success_count||0}}</small></article></div></section>
+    <details class="manual-discovery"><summary>补充单家酒店（可选）</summary><p class="muted">全球目录会自动发现酒店，此入口只用于补充遗漏。</p><div class="fields"><label>酒店集团<select v-model="selectedProvider"><option v-for="(name,key) in names" :key="key" :value="key">{{name}}</option></select></label><label v-if="needsOfficialUrl">官网酒店详情链接<input v-model="officialUrl" type="url" placeholder="https://…"></label><label v-else>酒店代码<input v-model="propertyCode" maxlength="10" placeholder="官网酒店代码"></label><button :disabled="actionBusy||!adminToken" @click="discover">添加酒店资料</button></div><p v-if="actionMessage" role="status">{{actionMessage}}</p></details>
+    </details>
+    <details class="advanced-section"><summary>诊断与覆盖详情</summary>
+    <p v-if="status?.message" class="muted">{{status.message}}</p>
     <section class="panel"><h2>全球官网目录接入进度</h2><p class="muted">已启用集团自动沿官网目录或地图发现酒店。目录按当前公开链接逐页核对并按酒店代码去重；目录全量核对不代表一年房价已全量抓取。取得报价的酒店单独统计。</p><div class="table"><table><thead><tr><th>集团</th><th>已收录酒店</th><th>取得报价的酒店</th><th>有效核对 / 发现目录</th><th>候选资料本轮已派发 / 总数</th><th>目录核对状态</th><th>目录状态 / 最近问题</th></tr></thead><tbody><tr v-for="c in catalogs" :key="c.provider"><td>{{names[c.provider]}}</td><td>{{c.hotels}}<div v-if="c.official_worldwide_hotels!=null" class="muted">官网总数 {{c.official_worldwide_hotels}}<br>目录去重 {{c.directory_unique_hotels}}</div></td><td>{{c.hotels_with_quotes}}</td><td>{{c.source==='OFFICIAL_BROWSER_DIRECTORY'?`${c.complete_directory_pages} / ${c.reachable_directory_pages}`:c.source==='OFFICIAL_SITEMAP'?`${c.sitemaps_read} / ${c.sitemaps_total}`:'—'}}</td><td>{{c.source==='OFFICIAL_SITEMAP'?`${c.candidate_tasks_dispatched} / ${c.hotel_candidates}`:'—'}}</td><td>{{catalogCoverage(c)}}</td><td>{{c.last_error||(c.source==='NOT_IMPLEMENTED'?'尚未实现':c.enabled?'自动发现中':'默认关闭')}}</td></tr></tbody></table></div></section>
     <MarriottDirectorySource :catalog="catalogs.find(c=>c.provider==='marriott')" :admin-token="adminToken" :request="api" @changed="refresh" />
     <PriceCoverage :catalogs="catalogs" :names="names" />
     <section class="panel"><h2>最近任务</h2><p v-if="!jobs.length" class="empty">暂无任务。</p><div class="table" v-else><table><thead><tr><th>集团</th><th>类型</th><th>状态</th><th>计划时间</th><th>错误</th></tr></thead><tbody><tr v-for="j in jobs" :key="j.id"><td>{{names[j.provider]}}</td><td>{{j.kind}}</td><td>{{j.status}}</td><td>{{when(j.scheduled_at)}}</td><td>{{j.error_type||'—'}}</td></tr></tbody></table></div></section>
     <IhgSitemapProgress :progress="catalogs.find(c=>c.provider==='ihg')?.auxiliary_sitemap" />
     <p v-for="c in catalogs.filter(c=>c.unparsed_hotel_links>0)" :key="'unparsed-'+c.provider" class="notice">{{names[c.provider]}}目录有 {{c.unparsed_hotel_links}} 个链接未能解析酒店身份，未计为成功收录；目录仍未完整核对。</p>
-    <footer>价格来自实际成功采集；无数据即显示空白 · Telegram 机器人可在本页面设置</footer>
+    </details></div>
+    <footer>官网真实报价 · 无数据不填示例价格 · 时区 Asia/Shanghai</footer>
   </main>
 </template>

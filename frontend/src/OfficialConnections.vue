@@ -38,6 +38,7 @@ async function test(){
 function clear(){if(window.confirm('清除所选集团导入的 Cookie？不会删除酒店、价格历史或整个浏览器资料。'))save(false);}
 watch(provider,()=>{origin.value=connection.value?.origin||defaults[provider.value];cookieText.value='';showCookie.value=false;hotelId.value='';message.value='';});
 watch(()=>props.adminToken,()=>{rows.value=[];cookieText.value='';showCookie.value=false;message.value='';});
+defineExpose({load});
 </script>
 
 <template>

@@ -27,6 +27,7 @@ from app.models.tables import (
     Watchlist,
     utcnow,
 )
+from app.providers.collection_strategy import collection_strategy
 from app.providers.gha_catalog import candidate_progress as gha_candidate_progress
 from app.providers.ihg_sitemap import STATE_KEY as IHG_SITEMAP_STATE_KEY
 from app.providers.ihg_sitemap import property_code as ihg_sitemap_code
@@ -248,6 +249,7 @@ async def providers(db: Db):
             }
         )
         item["implemented"] = name in FACTORIES
+        item["collection_strategy"] = collection_strategy(name.value)
         item["enabled"] = runtime.provider_policy(name).enabled and item["implemented"]
         item["verification"] = {
             "marriott": "PUBLIC_CN_PAGE_SAMPLE_VERIFIED_DEPLOYMENT_UNVERIFIED",
