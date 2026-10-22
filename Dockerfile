@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements-browser.txt \
     && usermod -d /home/hotelbug hotelbug \
     && chown -R hotelbug:hotelbug /ms-playwright /home/hotelbug
 COPY --chown=hotelbug:hotelbug docker/worker-entrypoint.sh /app/worker-entrypoint.sh
+COPY --chown=hotelbug:hotelbug collector/ /collector/
 USER hotelbug
 ENTRYPOINT ["sh", "/app/worker-entrypoint.sh"]
 CMD ["python", "-m", "app.crawler.worker"]

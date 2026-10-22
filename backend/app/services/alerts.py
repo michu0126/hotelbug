@@ -23,12 +23,15 @@ from app.models.tables import (
 from app.schemas.domain import JobInput, JobKind, RateData
 from app.services.anomaly import anomaly_score, calendar_features, comparison_percentages, text_amount
 from app.services.catalog_price_source import load_catalog_price_source
+from app.services.hotel_eligibility import is_test_hotel
 from app.services.jobs import LIVE, enqueue, outside_window_cancellation
 from app.services.offer_policy import classify_offer
 from app.services.pricing import displayed_price, price_field
 
 
 async def detect_drops(session: AsyncSession, hotel: Hotel, rates: list[RateData], settings: Settings) -> int:
+    if is_test_hotel(hotel):
+        return 0
     created = 0
     batches = defaultdict(list)
     seen_offers = set()
@@ -328,6 +331,10 @@ async def confirm_drop(session: AsyncSession, alert_id: str, job_id: str, rates:
         return False
     if alert.confirmed:
         return True
+    current_hotel = await session.get(Hotel, alert.hotel_id, populate_existing=True)
+    if current_hotel and is_test_hotel(current_hotel):
+        alert.payload = {**alert.payload, "verification": "CANCELLED", "verification_reason": "TEST_HOTEL"}
+        return False
     match = next((r for r in rates if r.offer_key() == alert.offer_key), None)
     payload = dict(alert.payload)
     amount = displayed_price(match) if match is not None else None

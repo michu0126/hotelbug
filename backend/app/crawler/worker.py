@@ -26,6 +26,7 @@ from app.services.catalog_price_source import (
     automatic_price_source_changed,
     load_catalog_price_source,
 )
+from app.services.hotel_eligibility import EXCLUDED_REASON, automatic_job_excluded, is_test_hotel
 from app.services.ihg_catalogs import (
     directory_policy,
     obsolete_directory_job,
@@ -116,6 +117,7 @@ async def current_calendar_hint_hotel(session, job, result):
         source.root != MARRIOTT_CN_ROOT
         or hotel is None
         or not hotel.active
+        or is_test_hotel(hotel)
         or hotel.provider != result.provider
         or hotel.provider_hotel_id != result.provider_hotel_id
         or not hotel.official_url.startswith("https://www.marriott.com.cn/")
@@ -192,6 +194,11 @@ async def process_one(sessions: async_sessionmaker, queue: Queue, settings: Sett
                 job.lease_owner, job.lease_until = None, None
                 return True
         hotel = await session.get(Hotel, job.hotel_id) if job.hotel_id else None
+        if automatic_job_excluded(job, hotel):
+            job.status = "CANCELLED"
+            job.error_message = ((job.error_message + "; ") if job.error_message else "") + EXCLUDED_REASON
+            job.lease_owner, job.lease_until = None, None
+            return True
         if await automatic_price_source_changed(session, job, hotel):
             # Retire only newly marked automatic work. Existing unmarked jobs,
             # explicit watches and manual checks retain their original meaning.

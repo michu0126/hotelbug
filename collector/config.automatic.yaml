@@ -1,0 +1,27 @@
+# 自动操作官网页面；同一时刻只查一间酒店的一个入住日。
+# 仍由 passive_capture 监听页面实际发出的响应，不直接重放接口请求。
+sqlite_path: data/automatic-queue.sqlite
+passive_config: config.passive.yaml
+profile: .profiles/marriott-passive
+port: 9222
+timezone: Asia/Shanghai
+days: 365
+nights: 1
+adults: 1
+min_delay_seconds: 15
+max_delay_seconds: 30
+revisit_seconds: 86400
+timeout_seconds: 90
+capture_timeout_seconds: 30
+ingestion_timeout_seconds: 20
+max_attempts: 3
+backoff_seconds: 60
+max_backoff_seconds: 900
+idle_seconds: 15
+
+# 只会自动查询这里的酒店；不是已经接入全球全部酒店。
+# 酒店地址应为官网酒店介绍页，不能填支付页、查价入口或接口地址。
+hotels:
+  - hotel_id: XIYBP
+    name: 西安钟楼福朋喜来登酒店
+    hotel_url: https://www.marriott.com.cn/hotels/xiybp-four-points-xian-bell-tower/overview/

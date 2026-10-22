@@ -3,8 +3,11 @@
 import asyncio
 import errno
 import hashlib
+import re
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -17,6 +20,27 @@ from app.services.official_connections import load_connection
 
 _sessions = {}
 _locks = {}
+_external_endpoint: ContextVar[str | None] = ContextVar("external_browser_endpoint", default=None)
+
+
+@contextmanager
+def external_browser(endpoint: str):
+    """Temporarily route provider pages to an already running local Chrome.
+
+    This opts out of browser launch and saved-cookie import. The caller owns
+    Chrome; this pool owns only pages it creates and their normal popups.
+    Pool cleanup disconnects the driver without closing Chrome or its context.
+    """
+    match = (
+        re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})/?", endpoint) if isinstance(endpoint, str) else None
+    )
+    if match is None or not 1 <= int(match[1]) <= 65535:
+        raise ValueError("External browser requires http://127.0.0.1:<port>")
+    token = _external_endpoint.set(f"http://127.0.0.1:{int(match[1])}")
+    try:
+        yield
+    finally:
+        _external_endpoint.reset(token)
 
 
 def startup_error(exc: Exception) -> ProviderError:
@@ -78,12 +102,34 @@ class BrowserSession:
     last_used: float = 0
     idle_page: object | None = None
     cookie_revision: str | None = None
+    external: bool = False
+    owned_pages: set = field(default_factory=set)
 
     def touch(self, *_):
         self.last_used = time.monotonic()
 
     def mark_closed(self, *_):
         self.closed = True
+
+    def own_page(self, page):
+        """Track only pages created here or opened by one of those pages."""
+        if page in self.owned_pages:
+            return
+        self.owned_pages.add(page)
+        self.touch()
+
+        def closed(*_):
+            self.owned_pages.discard(page)
+            self.touch()
+
+        page.on("close", closed)
+        page.on("popup", self.own_page)
+
+    @property
+    def has_active_pages(self):
+        if self.external:
+            return any(not page.is_closed() for page in self.owned_pages)
+        return any(page is not self.idle_page or page.url != "about:blank" for page in self.context.pages)
 
     @property
     def alive(self):
@@ -92,6 +138,21 @@ class BrowserSession:
     async def close(self):
         was_closed = self.closed
         self.closed = True
+        if self.external:
+            try:
+                results = await asyncio.gather(
+                    *(page.close() for page in tuple(self.owned_pages) if not page.is_closed()),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException) and not isinstance(result, BrowserError):
+                        raise result
+            finally:
+                self.owned_pages.clear()
+                # browser.close()/context.close() would close externally owned
+                # Chrome tabs. Stopping our Playwright transport only detaches.
+                await self.playwright.stop()
+            return
         try:
             if not was_closed:
                 await self.context.close()
@@ -103,6 +164,48 @@ class BrowserSession:
                 await self.playwright.stop()
 
 
+async def _external_provider_page(endpoint: str):
+    key = (id(asyncio.get_running_loop()), ("external", endpoint))
+    async with _locks.setdefault(key, asyncio.Lock()):
+        runtime = _sessions.get(key)
+        if runtime is not None and not runtime.alive:
+            _sessions.pop(key, None)
+            try:
+                await runtime.close()
+            except BrowserError:
+                pass
+            runtime = None
+        if runtime is None:
+            playwright = None
+            try:
+                playwright = await async_playwright().start()
+                browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=15000)
+                if len(browser.contexts) != 1:
+                    raise ProviderError(
+                        ErrorCode.BROWSER_UNAVAILABLE,
+                        "External Chrome must expose exactly one browser context",
+                    )
+                runtime = BrowserSession(playwright, browser, browser.contexts[0], external=True)
+                runtime.touch()
+                browser.on("disconnected", runtime.mark_closed)
+                runtime.context.on("close", runtime.mark_closed)
+                _sessions[key] = runtime
+            except BaseException as exc:
+                if playwright is not None:
+                    await asyncio.gather(playwright.stop(), return_exceptions=True)
+                if isinstance(exc, (BrowserError, OSError)):
+                    raise ProviderError(
+                        ErrorCode.TIMEOUT
+                        if isinstance(exc, BrowserTimeout)
+                        else ErrorCode.BROWSER_UNAVAILABLE,
+                        "Could not attach to the local external Chrome",
+                    ) from exc
+                raise
+        page = await runtime.context.new_page()
+        runtime.own_page(page)
+        return page
+
+
 async def new_provider_page(
     provider: str,
     *,
@@ -111,6 +214,9 @@ async def new_provider_page(
     headless: bool = True,
     session_dir: str | None = None,
 ):
+    endpoint = _external_endpoint.get()
+    if endpoint is not None:
+        return await _external_provider_page(endpoint)
     identity = (provider, proxy_server, browser_channel or "chromium", headless, session_dir)
     key = (id(asyncio.get_running_loop()), identity)
     lock = _locks.setdefault(key, asyncio.Lock())
@@ -211,9 +317,7 @@ async def close_idle_browser_sessions(max_idle_seconds: float = 120) -> None:
             continue
         async with _locks.setdefault(key, asyncio.Lock()):
             runtime = _sessions.get(key)
-            if runtime is None or any(
-                page is not runtime.idle_page or page.url != "about:blank" for page in runtime.context.pages
-            ):
+            if runtime is None or runtime.has_active_pages:
                 continue
             if time.monotonic() - runtime.last_used < max_idle_seconds:
                 continue

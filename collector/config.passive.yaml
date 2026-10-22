@@ -1,0 +1,33 @@
+# 本地被动监控：不驱动浏览器，不自动查价，不读取旧 NAS 数据库。
+sqlite_path: data/passive-monitor.sqlite
+captures_dir: ../captures/marriott
+scan_interval_seconds: 2
+max_capture_age_seconds: 7200
+timezone: Asia/Shanghai
+days: 365
+
+detector:
+  history_days: 30
+  min_history_samples: 5  # 同一入住日/方案，至少5个不同采集日；每个UTC采集日只算一次最低价
+  drop_fraction: 0.35
+  confirmation_delay_seconds: 180
+  confirmation_max_age_seconds: 21600
+  cooldown_hours: 24
+
+notifications:
+  channel: console  # console仅演练；填写凭据后改为 bark 或 telegram
+  bark_server: https://api.day.app
+  bark_device_key_env: BARK_DEVICE_KEY
+  telegram_token_env: TELEGRAM_BOT_TOKEN
+  telegram_chat_id_env: TELEGRAM_CHAT_ID
+
+# 空清单监控所有实际采集到的万豪酒店；不等于已经查遍全球酒店。
+# 若填写清单，则只对清单中的酒店产生候选/通知。绝对阈值必须显式指定币种。
+hotels: []
+hotel_names:
+  XIYBP: 西安钟楼福朋喜来登酒店
+# hotels:
+#   - hotel_id: XIYWH
+#     name: 你的酒店名称
+#     currency: CNY
+#     max_total_per_night: 你的含税费每晚上限数字

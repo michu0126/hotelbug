@@ -12,6 +12,7 @@ from app.schemas.calendar_hints import month_window
 from app.schemas.domain import JobInput, JobKind
 from app.services.capacity import load_capacity
 from app.services.catalog_price_source import load_catalog_price_source
+from app.services.hotel_eligibility import automatic_hotel_predicate
 from app.services.jobs import LIVE, enqueue, tier
 
 HOTEL_CURSOR = "calendar_hint_hotel_cursor:marriott"
@@ -106,7 +107,10 @@ async def expand_calendar_hints(session: AsyncSession, settings: Settings, budge
     if not isinstance(last_id, str):
         last_id = ""
     query = select(Hotel).where(
-        Hotel.active.is_(True), Hotel.provider == "marriott", source.hotel_predicate()
+        Hotel.active.is_(True),
+        Hotel.provider == "marriott",
+        source.hotel_predicate(),
+        automatic_hotel_predicate(),
     )
     inspection_limit = min(budget * 4, 200)
     hotels = (

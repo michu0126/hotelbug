@@ -1,0 +1,42 @@
+# Explicit opt-in example. This file is NOT automatically selected or started.
+# Ordinary official-page flow; only native CNY / one room / one night verified from samples.
+mode: live
+sqlite_path: data/hilton-live.sqlite
+loop_interval_seconds: 300
+dates:
+  start_offset_days: 0
+  days: 1  # Validate a single stay first. Increasing to 365 does not prove complete year coverage.
+  nights: 1
+  adults: 1
+  rooms: 1
+detector:
+  drop_fraction: 0.35
+  min_history_samples: 3
+  history_days: 90
+  confirmation_delay_seconds: 60
+  confirmation_max_age_seconds: 1800
+  cooldown_hours: 24
+requests:
+  concurrency_per_brand: 1
+  delay_min_seconds: 1
+  delay_max_seconds: 3
+  max_attempts: 3
+  backoff_base_seconds: 2
+  backoff_max_seconds: 60
+  timeout_seconds: 300
+browser:
+  headless: false
+  channel: chrome
+  proxy: null  # Fill only your explicitly configured existing proxy if needed.
+  max_rooms_per_search: 30
+  navigation_timeout_ms: 45000
+bark:
+  enabled: false
+  server: https://api.day.app
+  device_key_env: BARK_DEVICE_KEY
+  group: hotelbug
+watchlist:
+  - brand: hilton
+    hotel_id: SHAQTWA
+    name: 上海前滩华尔道夫酒店
+    official_url: https://www.hilton.com/

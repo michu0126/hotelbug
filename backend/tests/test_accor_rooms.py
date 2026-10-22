@@ -144,6 +144,7 @@ def test_room_and_plan_whitespace_normalization_preserves_offer_identity():
 async def test_all_room_timeout_is_typed_at_real_search_boundary(monkeypatch):
     provider = AccorBrowserProvider()
     page = MagicMock()
+    page.wait_for_function = AsyncMock()
     control = MagicMock()
     control.filter.return_value = control
     control.first = control

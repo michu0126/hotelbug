@@ -29,6 +29,7 @@ from app.schemas.calendar_hints import CalendarHintBatch, month_window
 from app.schemas.domain import JobInput, JobKind
 from app.services.capacity import load_capacity
 from app.services.catalog_price_source import SOURCE_MARKER, load_catalog_price_source
+from app.services.hotel_eligibility import is_test_hotel
 from app.services.jobs import LIVE, enqueue, within_monitoring_window
 from app.services.offer_policy import classify_offer
 
@@ -65,6 +66,7 @@ async def persist_calendar_hints(session, hotel, job, batch: CalendarHintBatch, 
         source.root != ROOT
         or not hotel
         or not hotel.active
+        or is_test_hotel(hotel)
         or hotel.provider != "marriott"
         or not hotel.official_url.startswith("https://www.marriott.com.cn/")
         or job.payload.get(SOURCE_MARKER) not in (None, ROOT)
@@ -265,6 +267,7 @@ async def admit_calendar_candidates(session, settings, budget=2):
         if (
             not hotel
             or not hotel.active
+            or is_test_hotel(hotel)
             or not hotel.official_url.startswith("https://www.marriott.com.cn/")
             or not within_monitoring_window(check_in, check_out)
         ):
@@ -361,6 +364,7 @@ async def match_calendar_candidates(session, hotel, job, rates):
         source.root == ROOT
         and current_hotel is not None
         and current_hotel.active
+        and not is_test_hotel(current_hotel)
         and current_hotel.provider == "marriott"
         and current_hotel.official_url.startswith("https://www.marriott.com.cn/")
         and job.payload.get(SOURCE_MARKER) in (None, ROOT)

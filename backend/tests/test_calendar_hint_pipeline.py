@@ -145,6 +145,51 @@ async def seed_candidate(session, config=None):
     return hotel, await session.scalar(select(PriceAlert))
 
 
+@pytest.mark.parametrize("stage", ["admission", "matching", "confirmation"])
+async def test_reclassified_qa_candidate_cannot_reach_notification_outbox(sessions, stage):
+    async with sessions() as session, session.begin():
+        hotel, alert = await seed_candidate(session)
+        if stage in ("matching", "confirmation"):
+            assert await admit_calendar_candidates(session, settings()) == 1
+            job = await session.get(CrawlJob, alert.payload["quote_job_id"])
+            if stage == "confirmation":
+                assert await match_calendar_candidates(session, hotel, job, [quote()]) == 1
+                job.status = "SUCCEEDED"
+                assert await admit_calendar_candidates(session, settings()) == 1
+                job = await session.get(CrawlJob, alert.verification_job_id)
+        hotel.provider_hotel_id, hotel.hotel_name = "AQAMC", "EMPOWER Training Hotel"
+        await session.flush()
+        if stage == "admission":
+            assert await admit_calendar_candidates(session, settings()) == 0
+        elif stage == "matching":
+            assert await match_calendar_candidates(session, hotel, job, [quote()]) == 0
+        else:
+            assert await confirm_job_drops(session, job, [quote(captured=NOW + timedelta(minutes=5))]) == 0
+        assert alert.payload["verification"] == "CANCELLED"
+        assert await counts(session, CalendarHintHistory, NotificationLog) == (4, 0)
+        assert not alert.confirmed and hotel.active
+
+
+async def test_test_hotel_never_creates_new_calendar_or_regular_drop_candidates(sessions):
+    from app.services.alerts import detect_drops
+
+    async with sessions() as session, session.begin():
+        hotel = await seed_hotel(session)
+        hotel.provider_hotel_id, hotel.hotel_name = "AQAMC", "EMPOWER Training Hotel"
+        await session.flush()
+        assert (
+            await observe(
+                session,
+                hotel,
+                "qa-observation",
+                hint(provider_hotel_id="AQAMC", source_url=SOURCE.replace("PBHMD", "AQAMC")),
+            )
+            == 0
+        )
+        assert await detect_drops(session, hotel, [quote(provider_hotel_id="AQAMC")], settings()) == 0
+        assert await counts(session, CalendarHintHistory, PriceAlert, NotificationLog) == (0, 0, 0)
+
+
 async def first_room_quote(session, hotel, alert, config=None):
     config = config or settings()
     assert await admit_calendar_candidates(session, config) == 1

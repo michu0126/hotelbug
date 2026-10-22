@@ -13,7 +13,7 @@ from app.core.config import Settings
 from app.core.errors import ErrorCode, ProviderError
 from app.crawler.worker import process_one
 from app.models.tables import CrawlJob, NotificationLog, PriceHistory, ProviderStatus
-from app.providers.ihg_browser import SAMPLE_URL, IHGBrowserProvider
+from app.providers.ihg_browser import BOOKING_CONTROLS_READY_SCRIPT, SAMPLE_URL, IHGBrowserProvider
 from app.providers.registry import FACTORIES
 from app.schemas.domain import HotelData, JobInput, JobKind
 from app.services import jobs
@@ -95,11 +95,12 @@ async def test_expands_every_room_and_waits_for_public_cards(monkeypatch):
     assert page.expanded == ["OAAN", "OQNN"]
     assert page.public == [("OAAN", False), ("OQNN", False)]
     assert "consolidate-search-submit-button" in page.clicked_controls
-    assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list[2:]] == [
+    assert [call.kwargs["arg"] for call in page.wait_for_function.await_args_list[3:]] == [
         "ROOM_CODEOAAN",
         "ROOM_CODEOQNN",
     ]
-    assert page.wait_for_function.await_args_list[0].kwargs["arg"] == {
+    assert page.wait_for_function.await_args_list[0].args == (BOOKING_CONTROLS_READY_SCRIPT,)
+    assert page.wait_for_function.await_args_list[1].kwargs["arg"] == {
         "dates": ["10/20/2026", "10/21/2026"],
         "guests": "1 Room, 2 Guests",
     }
@@ -109,6 +110,38 @@ async def test_expands_every_room_and_waits_for_public_cards(monkeypatch):
         SEARCH.check_in,
         SEARCH.check_out,
     ]
+
+
+async def test_delayed_booking_form_is_waited_before_any_calendar_click(monkeypatch):
+    provider, page, _ = provider_with_page(monkeypatch)
+    events = []
+    original = page.locator
+
+    async def wait(script, **kwargs):
+        if script == BOOKING_CONTROLS_READY_SCRIPT:
+            events.append("form-ready")
+
+    def locator(selector):
+        control = original(selector)
+        if selector == "input.calendar-input":
+            control.first.click = AsyncMock(side_effect=lambda: events.append("calendar-click"))
+        return control
+
+    page.wait_for_function.side_effect = wait
+    page.locator = locator
+    await provider.search_rates(SEARCH)
+    assert events == ["form-ready", "calendar-click"]
+
+
+async def test_unmounted_booking_form_reports_readiness_not_room_results(monkeypatch):
+    provider, page, _ = provider_with_page(monkeypatch)
+    page.wait_for_function.side_effect = BrowserTimeout("Offline unmounted form")
+    with pytest.raises(ProviderError) as caught:
+        await provider.search_rates(SEARCH)
+    assert caught.value.code == ErrorCode.TIMEOUT
+    assert str(caught.value) == "IHG booking page failed at booking controls readiness"
+    provider._choose_day.assert_not_awaited()
+    assert not page.clicked_controls
 
 
 @pytest.mark.parametrize("missing_cards", [False, True])

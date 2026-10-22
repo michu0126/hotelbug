@@ -134,6 +134,14 @@ async def test_flow_reads_target_explicit_visible_message_not_list_starting_pric
 
 
 async def test_worker_records_real_empty_result_without_price_or_notification(sessions, queue, monkeypatch):
+    class SnapshotDate(date):
+        @classmethod
+        def today(cls):
+            return SEARCH.check_in
+
+    # The redirect DOM is an October 2026 snapshot; keep its admission clock
+    # fixed instead of weakening the production rolling-year date boundary.
+    monkeypatch.setattr("app.services.jobs.date", SnapshotDate)
     provider, _, metadata = redirected_provider(monkeypatch)
     monkeypatch.setitem(FACTORIES, "ihg", lambda: provider)
     async with sessions() as db, db.begin():

@@ -6,14 +6,14 @@ defineProps({catalogs:{type:Array,default:()=>[]},names:{type:Object,required:tr
 <template>
   <section class="panel" aria-label="未来一年价格采集进度">
     <h2>未来一年价格采集进度</h2>
-    <p class="muted">范围为当前价格来源下已收录且启用的酒店，未来 365 个入住日，每次一晚、1 间房、2 成人；不是全球酒店总量。房型报价按入住日确认；万豪中文官网另支持按月读取日历起价，独立统计于下表，不代表一次取得全年可订房型。</p>
+    <p class="muted">范围为当前价格来源下已收录且启用的酒店，排除已识别的测试／培训条目，未来 365 个入住日，每次一晚、1 间房、2 成人；不是全球酒店总量。房型报价按入住日确认；万豪中文官网另支持按月读取日历起价，独立统计于下表，不代表一次取得全年可订房型。</p>
     <p class="muted">“更新有效”表示最近完成的查询仍在设置的刷新间隔内，包括明确无房或未开放预订的日期。历史报价和排队任务不会被算作正在有效监控；切换官网来源后，无法核对来源的旧记录也不会计入。</p>
     <div class="table"><table>
       <thead><tr><th>集团</th><th>范围内酒店</th><th>更新有效 / 应查询日期</th><th>有效覆盖率</th><th>已过期</th><th>尚未查询</th><th>有效查询结果</th></tr></thead>
       <tbody><tr v-for="c in catalogs" :key="c.provider">
         <td>{{names[c.provider]}}</td>
         <template v-if="c.price_coverage">
-          <td>{{countLabel(c.price_coverage.eligible_hotels)}}</td>
+          <td>{{countLabel(c.price_coverage.eligible_hotels)}}<div v-if="c.price_coverage.excluded_test_hotels" class="muted">另排除测试／培训酒店 {{countLabel(c.price_coverage.excluded_test_hotels)}} 家（目录及历史保留）</div></td>
           <td>{{countLabel(c.price_coverage.fresh_stays)}} / {{countLabel(c.price_coverage.required_stays)}}</td>
           <td>{{priceCoveragePercent(c.price_coverage)}}</td>
           <td>{{countLabel(c.price_coverage.stale_stays)}}</td>

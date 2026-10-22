@@ -72,6 +72,7 @@ async def test_booking_navigation_waits_for_commit_then_verifiable_offers(monkey
     page.locator.return_value = control
     page.get_by_role.return_value = control
     page.wait_for_url = AsyncMock()
+    page.wait_for_function = AsyncMock()
     page.content = AsyncMock(return_value=rendered_page())
     page.url = "https://all.accor.com/booking/en/accor/hotel/0338"
     monkeypatch.setattr(provider, "_open", AsyncMock(return_value=page))

@@ -408,6 +408,67 @@ async def test_unpriced_month_is_an_observed_failure_after_wait_not_empty_succes
     assert "no confirmed cash-price hints" in str(error.value.__cause__)
 
 
+@pytest.mark.parametrize(
+    "failure", ["placeholder", "missing_price", "ambiguous_price", "wrong_hotel", "pending"]
+)
+async def test_settle_distinguishes_loading_from_stable_validation_errors(monkeypatch, failure):
+    provider, page = browser()
+    data = snapshot()
+    activity = hints.PageActivity()
+    if failure == "placeholder":
+        data["hotels"] = [{"name": "", "href": "/hotels/travel/"}]
+    elif failure == "missing_price":
+        data["cells"][13]["price_text"] = ""
+    elif failure in ("ambiguous_price", "pending"):
+        data["cells"][13]["price_text"] = "$12-18"
+        if failure == "pending":
+            activity.pending.add(1)
+    else:
+        data["hotels"][0]["href"] = "/hotels/travel/nycmq-other/"
+    page.evaluate = AsyncMock(return_value=data)
+    clock = [0.0]
+    monkeypatch.setattr(hints.time, "monotonic", lambda: clock[0])
+    activity.last_change = 0
+
+    async def advance(_):
+        clock[0] += 1
+
+    monkeypatch.setattr(hints.asyncio, "sleep", advance)
+    with pytest.raises(ProviderError) as caught:
+        await hints.settled_calendar(provider, page, activity, request())
+    if failure == "ambiguous_price":
+        assert caught.value.code == ErrorCode.PROVIDER_CHANGED
+        assert "amount is missing or ambiguous" in str(caught.value)
+    elif failure == "wrong_hotel":
+        assert caught.value.code == ErrorCode.INVALID_RESPONSE
+        assert "hotel identity does not match" in str(caught.value)
+    else:
+        assert caught.value.code == ErrorCode.TIMEOUT
+        assert {
+            "placeholder": "hotel identity not loaded",
+            "missing_price": "date prices not loaded",
+            "pending": "requests still pending",
+        }[failure] in str(caught.value)
+    assert "nycmq" not in str(caught.value) and "https://" not in str(caught.value)
+
+
+async def test_placeholder_can_hydrate_to_a_valid_month_in_the_same_page(monkeypatch):
+    provider, page = browser()
+    loading = snapshot()
+    loading["hotels"] = [{"name": "", "href": "/hotels/travel/"}]
+    page.evaluate = AsyncMock(side_effect=[loading, loading] + [snapshot()] * 8)
+    clock = [0.0]
+    monkeypatch.setattr(hints.time, "monotonic", lambda: clock[0])
+
+    async def advance(_):
+        clock[0] += 1
+
+    monkeypatch.setattr(hints.asyncio, "sleep", advance)
+    month, _ = await hints.settled_calendar(provider, page, hints.PageActivity(), request())
+    assert month.first_day == date(2026, 10, 1)
+    assert clock[0] >= 4
+
+
 def test_month_rollover_and_leap_year_cell_labels():
     assert hints.next_month(date(2026, 12, 1)) == date(2027, 1, 1)
     assert hints.cell_date("Thu Feb 29 2024") == date(2024, 2, 29)

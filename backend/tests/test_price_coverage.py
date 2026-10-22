@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, func, select
 from sqlalchemy.dialects import postgresql, sqlite
 
 from app.core.config import ProviderPolicy, Settings
@@ -66,6 +66,22 @@ async def test_empty_catalog_is_not_complete_or_worldwide_coverage(sessions):
         assert not row["collected_first_pass_complete"]
         assert not row["collected_fresh_coverage_complete"]
         assert row["query_mode"] == "SINGLE_STAY"
+
+
+async def test_qa_is_excluded_from_both_denominator_and_observations_without_deletion(sessions):
+    async with sessions() as db, db.begin():
+        db.add(hotel())
+        qa = hotel("qa")
+        qa.provider_hotel_id, qa.hotel_name = "AQAMC", "EMPOWER Training Hotel"
+        db.add(qa)
+        await db.flush()
+        db.add_all([scan(1), scan(1, hotel_id="qa")])
+    async with sessions() as db:
+        row = (await price_coverage_by_provider(db, Settings(), NOW))["marriott"]
+        assert row["eligible_hotels"] == 1 and row["excluded_test_hotels"] == 1
+        assert row["required_stays"] == 365 and row["fresh_stays"] == 1
+        assert (await db.get(Hotel, "qa")).active
+        assert await db.scalar(select(func.count()).select_from(StayScan)) == 2
 
 
 async def test_tier_boundaries_and_successful_no_inventory_are_distinct_fresh_stays(sessions):

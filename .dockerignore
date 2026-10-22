@@ -22,3 +22,8 @@ frontend/dist
 logs
 .browser-sessions
 **/.browser-sessions
+captures
+**/.profiles
+collector/data
+collector/samples
+*.har

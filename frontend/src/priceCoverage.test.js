@@ -44,6 +44,14 @@ test('legacy backend is explicitly unknown rather than complete',async()=>{
   assert.ok(html.includes('尚未提供真实日期覆盖统计'));
   assert.ok(!html.includes('100%'));
 });
+
+test('test properties remain in the directory but are explicitly excluded from automatic coverage',async()=>{
+  const html=await renderToString(Vue.createSSRApp(component,{names:{marriott:'万豪'},catalogs:[{
+    provider:'marriott',price_coverage:{eligible_hotels:336,excluded_test_hotels:21,required_stays:122640,fresh_stays:0}
+  }]}));
+  assert.ok(html.includes('另排除测试／培训酒店 21 家（目录及历史保留）'));
+  assert.ok(html.includes('0 / 122,640'));
+});
 test('only fresh observed stays count toward coverage',()=>{
   assert.equal(priceCoveragePercent({required_stays:365,fresh_stays:0,previously_scanned_stays:365}),'0%');
   assert.equal(priceCoveragePercent({required_stays:365,fresh_stays:365}),'100%');

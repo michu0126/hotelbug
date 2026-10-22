@@ -1,0 +1,47 @@
+{
+  "provenance": "Public fields whitelisted from updated user 123.har entry 117, 2026-10-18; credentials omitted",
+  "variables": {
+    "ctyhocn": "SHAQT", "arrivalDate": "2026-11-17", "departureDate": "2026-11-18",
+    "numAdults": 1, "numChildren": 0, "numRooms": 1, "selectedRoomTypeCode": "K1DV",
+    "specialRates": {"hhonors": false, "aaa": false, "pnd": null}
+  },
+  "response": {
+    "data": {
+      "hotel": {
+        "ctyhocn": "SHAQTWA",
+        "shopAvail": {
+          "statusCode": 0, "currencyCode": "CNY", "summary": {"specialRates": [], "requestedRates": []},
+          "roomTypes": [{
+            "roomTypeCode": "K1DV", "roomTypeName": "江景大床豪华客房", "roomOccupancy": 3,
+            "roomOnlyRates": [
+              {
+                "roomTypeCode": "K1DV", "ratePlanCode": "LV0", "rateAmount": 3598.1,
+                "rateAmountFmt": "¥3,599", "fullAmountAfterTax": "¥3,813.99",
+                "guarantee": {"guarPolicyCode": "CCG", "cxlPolicyCode": "CX1", "depositRequired": false, "nonRefundable": false, "isAfterCxlDeadline": null},
+                "ratePlan": {"confidentialRates": false, "ratePlanName": "弹性房价", "ratePlanDesc": "请在2026年11月16日前更改或取消。仅限客房。", "ratePlanCode": "LV0", "hhonorsMembershipRequired": false, "serviceChargesAndTaxesIncluded": false, "specialRateType": null},
+                "hhonorsDiscountRate": {"roomTypeCode": "K1DV", "ratePlanCode": "HPPRP1", "rateAmount": 3418.2, "fullAmountAfterTax": "¥3,623.29", "ratePlan": {"ratePlanCode": "HPPRP1", "ratePlanName": "会员价", "ratePlanDesc": "须拥有希尔顿荣誉客会会籍。", "confidentialRates": false, "serviceChargesAndTaxesIncluded": false, "specialRateType": null}},
+                "serviceChargeDesc": "<b>价格包含每次入住10.00</b>%的服务费，但不包括税金和政府收费"
+              },
+              {
+                "roomTypeCode": "K1DV", "ratePlanCode": "PR09AP", "rateAmount": 3058.39,
+                "rateAmountFmt": "¥3,059", "fullAmountAfterTax": "¥3,241.89",
+                "guarantee": {"guarPolicyCode": "CCD", "cxlPolicyCode": "NREF", "depositRequired": true, "nonRefundable": true, "isAfterCxlDeadline": null},
+                "ratePlan": {"confidentialRates": false, "ratePlanName": "提前预付", "ratePlanDesc": "需支付预付款且不可退款。", "ratePlanCode": "PR09AP", "hhonorsMembershipRequired": false, "serviceChargesAndTaxesIncluded": false, "specialRateType": null},
+                "hhonorsDiscountRate": {"roomTypeCode": "K1DV", "ratePlanCode": "HPPAP4", "rateAmount": 2752.55, "fullAmountAfterTax": "¥2,917.70", "ratePlan": {"ratePlanCode": "HPPAP4", "ratePlanName": "会员提前预付", "ratePlanDesc": "需支付预付款且不可退款。须拥有希尔顿荣誉客会会籍。", "confidentialRates": false, "serviceChargesAndTaxesIncluded": false, "specialRateType": null}},
+                "serviceChargeDesc": "<b>价格包含每次入住10.00</b>%的服务费，但不包括税金和政府收费"
+              }
+            ],
+            "packageRates": [{
+              "roomTypeCode": "K1DV", "ratePlanCode": "PR09B1", "rateAmount": 4258.47,
+              "rateAmountFmt": "¥4,259", "fullAmountAfterTax": "¥4,513.98",
+              "guarantee": {"guarPolicyCode": "CCG", "cxlPolicyCode": "CX1", "depositRequired": false, "nonRefundable": false, "isAfterCxlDeadline": null},
+              "ratePlan": {"confidentialRates": false, "ratePlanName": "晚餐、住宿和早餐", "ratePlanDesc": "住宿餐饮套餐（含早餐和晚餐）。包含2人早餐及在arame享用晚餐", "ratePlanCode": "PR09B1", "hhonorsMembershipRequired": false, "serviceChargesAndTaxesIncluded": false, "specialRateType": null},
+              "serviceChargeDesc": "<b>价格包含每次入住10.00</b>%的服务费，但不包括税金和政府收费"
+            }],
+            "requestedRoomRates": [], "specialRoomRates": [], "redemptionRoomRates": []
+          }]
+        }
+      }
+    }
+  }
+}

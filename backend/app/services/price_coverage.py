@@ -14,6 +14,7 @@ from sqlalchemy import and_, case, func, or_, select, true
 from app.models.tables import CrawlJob, Hotel, PriceHistory, StayScan, utcnow
 from app.schemas.domain import ProviderName
 from app.services.catalog_price_source import SOURCE_MARKER, load_catalog_price_source
+from app.services.hotel_eligibility import automatic_hotel_predicate, test_hotel_predicate
 
 SHANGHAI = timezone(timedelta(hours=8))
 OBSERVED_STATUSES = ("AVAILABLE", "UNAVAILABLE", "NOT_OPEN")
@@ -92,13 +93,21 @@ async def price_coverage_by_provider(session, settings, now=None) -> dict[str, d
         Hotel.provider.in_(providers),
         source.hotel_predicate(),
     )
-    hotel_counts = dict(
-        (
+    hotel_counts = {
+        provider: (eligible, excluded)
+        for provider, eligible, excluded in (
             await session.execute(
-                select(Hotel.provider, func.count()).where(*hotel_scope).group_by(Hotel.provider)
+                select(
+                    Hotel.provider,
+                    func.sum(case((automatic_hotel_predicate(), 1), else_=0)),
+                    func.sum(case((test_hotel_predicate(), 1), else_=0)),
+                )
+                .where(*hotel_scope)
+                .group_by(Hotel.provider)
             )
         ).all()
-    )
+    }
+    hotel_scope = (*hotel_scope, automatic_hotel_predicate())
     cutoff = case(
         (StayScan.check_in <= today + timedelta(days=30), now - timedelta(hours=settings.hot_interval_hours)),
         (
@@ -137,7 +146,7 @@ async def price_coverage_by_provider(session, settings, now=None) -> dict[str, d
     }
     result = {}
     for provider in providers:
-        hotels = hotel_counts.get(provider, 0)
+        hotels, excluded = hotel_counts.get(provider, (0, 0))
         required = hotels * 365
         previous = sum(counts.get((provider, status), (0, 0))[0] for status in OBSERVED_STATUSES)
         fresh_by_status = {status: counts.get((provider, status), (0, 0))[1] for status in OBSERVED_STATUSES}
@@ -166,6 +175,7 @@ async def price_coverage_by_provider(session, settings, now=None) -> dict[str, d
             "global_monitoring_enabled": settings.global_monitoring_enabled,
             "provider_enabled": policy.enabled,
             "eligible_hotels": hotels,
+            "excluded_test_hotels": excluded,
             "required_stays": required,
             "previously_scanned_stays": previous,
             "fresh_stays": fresh,

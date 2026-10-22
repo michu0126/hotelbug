@@ -9,6 +9,7 @@ from app.providers.marriott_cn_catalog import ROOT as CN_ROOT
 from app.schemas.calendar_hints import SHANGHAI
 from app.schemas.domain import ProviderName
 from app.services.catalog_price_source import load_catalog_price_source
+from app.services.hotel_eligibility import automatic_hotel_predicate, test_hotel_predicate
 
 BASIS = "CALENDAR_MINIMUM_TAX_UNCONFIRMED"
 
@@ -40,6 +41,7 @@ async def calendar_hint_coverage_by_provider(session, settings, now=None) -> dic
             "rooms": 1,
             "nights": 1,
             "eligible_hotels": None,
+            "excluded_test_hotels": None,
             "observed_hotels": None,
             "observed_dates": None,
             "fresh_dates": None,
@@ -56,7 +58,15 @@ async def calendar_hint_coverage_by_provider(session, settings, now=None) -> dic
         Hotel.active.is_(True),
         source.hotel_predicate(),
     )
-    hotels = await session.scalar(select(func.count()).select_from(Hotel).where(*hotel_scope))
+    hotels, excluded = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(case((automatic_hotel_predicate(), 1), else_=0)), 0),
+                func.coalesce(func.sum(case((test_hotel_predicate(), 1), else_=0)), 0),
+            ).where(*hotel_scope)
+        )
+    ).one()
+    hotel_scope = (*hotel_scope, automatic_hotel_predicate())
     latest = (
         select(
             CalendarHintHistory.hotel_id.label("hotel_id"),
@@ -105,6 +115,7 @@ async def calendar_hint_coverage_by_provider(session, settings, now=None) -> dic
         supported=True,
         status="SUPPORTED",
         eligible_hotels=hotels,
+        excluded_test_hotels=excluded,
         observed_hotels=observed_hotels,
         observed_dates=observed,
         fresh_dates=fresh,

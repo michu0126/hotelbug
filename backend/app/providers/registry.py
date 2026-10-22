@@ -14,14 +14,14 @@ def provider_settings() -> Settings:
 
 def marriott_browser() -> HotelProvider:
     try:
-        from app.providers.marriott_hybrid import MarriottHybridProvider
+        from app.providers.marriott_worker import MarriottWorkerProvider
     except ImportError as exc:
         raise ProviderError(
             ErrorCode.BROWSER_UNAVAILABLE, "Install the browser-enabled Worker image"
         ) from exc
 
     settings = provider_settings()
-    return MarriottHybridProvider(
+    return MarriottWorkerProvider(
         proxy_server=settings.browser_proxy_url.get_secret_value() or None,
         browser_channel=settings.browser_channel or None,
         session_dir=settings.browser_session_dir,

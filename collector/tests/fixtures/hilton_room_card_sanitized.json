@@ -1,0 +1,40 @@
+{
+  "provenance": "Whitelisted fields from user-supplied Hilton HARs, 2026-10-18; not a synthetic live quote",
+  "variables": {
+    "ctyhocn": "SHAQT", "arrivalDate": "2026-11-11", "departureDate": "2026-11-12",
+    "numAdults": 1, "numChildren": 0, "numRooms": 1,
+    "specialRates": {"hhonors": false, "aaa": false, "pnd": null}
+  },
+  "response": {
+    "data": {
+      "hotel": {
+        "ctyhocn": "SHAQTWA",
+        "shopAvail": {
+          "statusCode": 0, "currencyCode": "CNY", "summary": {"specialRates": [], "requestedRates": []},
+          "roomTypes": [
+            {
+              "roomTypeCode": "K1D", "roomTypeName": "大床豪华客房", "roomOccupancy": 3,
+              "moreRatesFromRate": {
+                "roomTypeCode": "K1D", "rateAmount": 2391.54, "rateAmountFmt": "¥2,392",
+                "amountAfterTaxFmt": "¥2,536", "fullAmountAfterTax": "¥2,535.03",
+                "ratePlanCode": "HPPAP4", "cmaTotalPriceIndicator": false,
+                "ratePlan": {"confidentialRates": false, "serviceChargesAndTaxesIncluded": false}
+              },
+              "quickBookRate": null, "bookNowRate": null, "roomTypeOffers": [], "redemptionRoomRates": []
+            },
+            {
+              "roomTypeCode": "Q2D", "roomTypeName": "两张双人床豪华客房", "roomOccupancy": 3,
+              "moreRatesFromRate": {
+                "roomTypeCode": "Q2D", "rateAmount": 2391.54, "rateAmountFmt": "¥2,392",
+                "amountAfterTaxFmt": "¥2,536", "fullAmountAfterTax": "¥2,535.03",
+                "ratePlanCode": "HPPAP4", "cmaTotalPriceIndicator": false,
+                "ratePlan": {"confidentialRates": false, "serviceChargesAndTaxesIncluded": false}
+              },
+              "quickBookRate": null, "bookNowRate": null, "roomTypeOffers": [], "redemptionRoomRates": []
+            }
+          ]
+        }
+      }
+    }
+  }
+}

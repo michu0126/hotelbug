@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import AppSetting, CrawlJob, Hotel, ProviderStatus, StayScan
 from app.schemas.domain import JobKind
+from app.services.hotel_eligibility import automatic_hotel_predicate
 from app.services.jobs import LIVE
 
 
@@ -24,6 +25,7 @@ async def marriott_probe_hotel(session: AsyncSession, hotel_id: str | None = Non
     query = select(Hotel).where(
         Hotel.provider == "marriott",
         Hotel.active.is_(True),
+        automatic_hotel_predicate(),
         Hotel.official_url.like((await marriott_probe_origin(session)) + "/%"),
     )
     if hotel_id is not None:
@@ -41,6 +43,7 @@ async def ordinary_price_work_due(session: AsyncSession, provider: str, now: dat
             CrawlJob.provider == provider,
             Hotel.provider == provider,
             Hotel.active.is_(True),
+            automatic_hotel_predicate(),
             CrawlJob.kind.in_((JobKind.FETCH_RATE, JobKind.FETCH_CALENDAR, JobKind.VERIFY_ANOMALY)),
             CrawlJob.status.in_(LIVE),
             CrawlJob.scheduled_at <= now,
@@ -94,6 +97,7 @@ async def recent_healthy_scan(session: AsyncSession, provider: str, now: datetim
     if provider == "marriott":
         query = query.where(
             Hotel.active.is_(True),
+            automatic_hotel_predicate(),
             Hotel.provider == provider,
             Hotel.official_url.like((await marriott_probe_origin(session)) + "/%"),
         )

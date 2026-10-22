@@ -33,6 +33,19 @@ from app.schemas.domain import CatalogPageData, HealthResult, HotelData, RateDat
 
 SAMPLE_URL = "https://www.ihg.com/hotelindigo/hotels/us/en/london/lonls/hoteldetail"
 
+# A visible hotel heading precedes this dynamically mounted booking component.
+# Readonly date inputs are intentional: the normal calendar opens on click.
+BOOKING_CONTROLS_READY_SCRIPT = """() => {
+    const usable = e => !!e && !!e.getClientRects().length &&
+        getComputedStyle(e).visibility !== 'hidden' && !e.disabled &&
+        e.getAttribute('aria-disabled') !== 'true';
+    const dates = [...document.querySelectorAll('input.calendar-input')];
+    return dates.length === 2 && dates.every(usable) &&
+        usable(document.querySelector('#room-and-guest')) &&
+        usable(document.querySelector('[data-testid="roomAndGuestModal"]')) &&
+        usable(document.querySelector('[data-testid="consolidate-search-submit-button"]'));
+}"""
+
 
 class IHGBrowserProvider(AccorBrowserProvider):
     session_provider = "ihg"
@@ -188,6 +201,9 @@ class IHGBrowserProvider(AccorBrowserProvider):
         stage = "hotel page"
         try:
             page, hotel = await self._open_property(url)
+            stage = "booking controls readiness"
+            await page.wait_for_function(BOOKING_CONTROLS_READY_SCRIPT, timeout=30000)
+            await self._check_access(page)
             stage = "open stay calendar"
             await page.locator("input.calendar-input").first.click()
             stage = "check-in date"

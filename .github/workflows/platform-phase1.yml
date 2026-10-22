@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - 'collector/**'
       - 'frontend/**'
       - 'docker/**'
       - 'Dockerfile'
@@ -36,12 +37,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r backend/requirements-dev.txt
+      - run: pip install -r backend/requirements-dev.txt -e './collector[dev]'
+      - name: Install browser for isolated public-page fixture tests
+        run: |
+          python -m playwright install --with-deps chromium
+          if ! command -v google-chrome >/dev/null; then python -m playwright install --with-deps chrome; fi
       - name: Lint and offline fixture tests
         working-directory: backend
         run: |
           ruff check app tests alembic
           ruff format --check app tests alembic
+          pytest -q
+      - name: Collector fixture and scheduler tests
+        working-directory: collector
+        run: |
+          ruff check .
+          ruff format --check .
           pytest -q
       - name: PostgreSQL migration round trip
         working-directory: backend

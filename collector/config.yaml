@@ -1,0 +1,40 @@
+mode: mock  # live 可启用希尔顿普通网页适配；默认不访问官网，mock 永不真实推送
+sqlite_path: data/monitor.sqlite
+loop_interval_seconds: 300
+dates:
+  start_offset_days: 0
+  days: 3  # 改成 365 可枚举一年；不等于已实现官网批量取价
+  nights: 1
+  adults: 2
+  rooms: 1
+detector:
+  drop_fraction: 0.35
+  min_history_samples: 3
+  history_days: 90
+  confirmation_delay_seconds: 60
+  confirmation_max_age_seconds: 1800
+  cooldown_hours: 24
+requests:
+  concurrency_per_brand: 1
+  delay_min_seconds: 1
+  delay_max_seconds: 3
+  max_attempts: 3
+  backoff_base_seconds: 2
+  backoff_max_seconds: 60
+  timeout_seconds: 300  # 一晚任务逐房型展开；不是单次 HTTP 超时
+browser:
+  headless: false
+  channel: chrome  # Linux 使用已安装的 Chromium 时可改为 null
+  proxy: null  # 如确实需要，填 http://192.168.50.4:7890；不会自动切换出口重试
+  max_rooms_per_search: 30
+  navigation_timeout_ms: 45000
+bark:
+  enabled: false
+  server: https://api.day.app
+  device_key_env: BARK_DEVICE_KEY
+  group: hotelbug
+watchlist:
+  - brand: hilton
+    hotel_id: MOCK-HILTON-001
+    name: 模拟希尔顿酒店（不是真实报价）
+    official_url: https://www.hilton.com/en/

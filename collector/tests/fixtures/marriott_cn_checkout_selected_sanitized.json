@@ -1,0 +1,27 @@
+{
+  "kind": "marriott_selected_checkout_v1",
+  "source_site": "www.marriott.com.cn",
+  "price_response_hash": "d1c756442aec26c0768638d3bbc8335fbdc04fb81872b5103f6c6c52db34bf25",
+  "product_identity": ["NYCTE", "RMOC", "GENR", "2026-10-18", "2026-10-19"],
+  "member_rate": true,
+  "adults": 1,
+  "rooms": 1,
+  "currency": "USD",
+  "hotel_timezone": "America/New_York",
+  "totals": {"subtotal": "417.00", "fees": "45.00", "taxes": "71.64", "total": "533.64"},
+  "rules": [
+    {
+      "code": "CPC",
+      "non_refundable": false,
+      "descriptions": [
+        "您可于酒店当地时间夜间 11:59 之前免费取消您的预订，截止日期为 2026-10-15。",
+        "请注意，如果您需在该期限后取消预订，我们将收取 482.01 USD的费用。如果您已经支付预付款，我们将扣留全部或部分预付款。如果您尚未支付预付款，我们将从您的信用卡中扣除。"
+      ]
+    }
+  ],
+  "_provenance": {
+    "source": "Whitelisted projection of the local 2026-10-19 HAR analysis, not a new checkout request",
+    "bindings": "Selected product and all checkout responses matched the same cart in the original offline audit; identifiers are omitted",
+    "timezone": "Explicit NYCTE hotel mapping; not inferred from the date-only freeCancellationUntil value"
+  }
+}

@@ -9,6 +9,7 @@ from app.schemas.domain import JobInput, JobKind
 from app.services.capacity import load_capacity
 from app.services.catalog_price_source import load_catalog_price_source
 from app.services.failed_stays import expand_failed_stays
+from app.services.hotel_eligibility import automatic_hotel_predicate
 from app.services.jobs import LIVE, enqueue, tier
 from app.services.revisit_rotation import fair_revisit_rows
 
@@ -78,6 +79,7 @@ async def expand_successful_rechecks(session, settings, enabled, budget, *, capa
         .outerjoin(ProviderStatus, ProviderStatus.provider == Hotel.provider)
         .where(
             Hotel.active.is_(True),
+            automatic_hotel_predicate(),
             Hotel.provider.in_(enabled),
             or_(ProviderStatus.blocked_until.is_(None), ProviderStatus.blocked_until <= now),
             StayScan.check_in >= today,

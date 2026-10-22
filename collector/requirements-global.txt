@@ -1,0 +1,9 @@
+# The existing official-page adapters and production scheduler, on Python 3.11+.
+-e .
+beautifulsoup4>=4.12,<5
+pydantic>=2.10,<3
+pydantic-settings>=2.5,<3
+SQLAlchemy>=2.0,<3
+aiosqlite>=0.20,<1
+redis>=5,<7
+psycopg[binary]>=3.2,<4

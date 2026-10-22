@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, func, select
 
 from app.core.config import Settings
 from app.models.tables import AppSetting, CalendarHintHistory, CrawlJob, Hotel, PriceHistory, StayScan
@@ -82,6 +82,29 @@ async def test_accepted_source_with_no_observations_is_supported_but_not_measure
     assert row["required_dates"] == 365 and row["eligible_hotels"] == 1
     assert row["observed_dates"] == row["fresh_dates"] == row["stale_dates"] == row["observed_hotels"] == 0
     assert result["ihg"]["status"] == "UNSUPPORTED_PROVIDER" and result["ihg"]["observed_dates"] is None
+
+
+async def test_test_hotel_history_is_retained_but_not_counted_as_calendar_coverage(sessions):
+    async with sessions() as db, db.begin():
+        db.add(AppSetting(key="catalog:marriott", value={"root": CN_ROOT}))
+        db.add(hotel())
+        qa = hotel("qa")
+        qa.provider_hotel_id, qa.hotel_name = "AQAMC", "EMPOWER Training Hotel"
+        db.add(qa)
+        await db.flush()
+        db.add(hint())
+        db.add(
+            hint(
+                hotel_id="qa",
+                source_url="https://www.marriott.com.cn/search/availabilityCalendar.mi?propertyCode=AQAMC",
+            )
+        )
+    async with sessions() as db:
+        row = (await calendar_hint_coverage_by_provider(db, Settings(), NOW))["marriott"]
+        assert row["eligible_hotels"] == row["excluded_test_hotels"] == 1
+        assert row["observed_dates"] == row["observed_hotels"] == 1
+        assert row["required_dates"] == 365
+        assert await db.scalar(select(func.count()).select_from(CalendarHintHistory)) == 2
 
 
 async def test_hot_warm_cold_cutoffs_and_duplicate_history_use_latest_distinct_hotel_date(sessions):

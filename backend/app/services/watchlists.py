@@ -13,6 +13,7 @@ from app.schemas.domain import JobInput, JobKind
 from app.schemas.watchlists import SCOPES
 from app.services.capacity import load_capacity
 from app.services.catalog_price_source import load_catalog_price_source
+from app.services.hotel_eligibility import automatic_hotel_predicate
 from app.services.jobs import LIVE, enqueue, tier
 from app.services.rechecks import expand_rechecks
 from app.services.watch_scopes import scoped_hotels
@@ -284,6 +285,7 @@ async def expand_global(
         .outerjoin(ProviderStatus, ProviderStatus.provider == Hotel.provider)
         .where(
             Hotel.active.is_(True),
+            automatic_hotel_predicate(),
             Hotel.provider.in_(enabled),
             or_(ProviderStatus.blocked_until.is_(None), ProviderStatus.blocked_until <= now),
         )

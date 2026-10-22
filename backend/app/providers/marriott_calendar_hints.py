@@ -208,6 +208,8 @@ async def settled_calendar(provider, page, activity, request, *, expected_month=
     fingerprint = None
     unchanged_since = time.monotonic()
     last_error = None
+    snapshot = {}
+    parsed = None
     while time.monotonic() < deadline:
         await provider._check_access(page, activity.rejected_status)
         # Normal Update Search submits a form and removes propertyCode from
@@ -221,6 +223,7 @@ async def settled_calendar(provider, page, activity, request, *, expected_month=
             fingerprint, unchanged_since = current, time.monotonic()
         try:
             parsed = parse_month(snapshot, request)
+            last_error = None
         except ProviderError as exc:
             parsed, last_error = None, exc
         if (
@@ -233,9 +236,56 @@ async def settled_calendar(provider, page, activity, request, *, expected_month=
         ):
             return parsed, snapshot
         await asyncio.sleep(0.25)
+    # Preserve a stable, populated page's actual validation failure. Previously
+    # every parser error was hidden behind TIMEOUT and could be blindly retried.
+    loading = calendar_loading_reason(snapshot)
+    if (
+        last_error
+        and not loading
+        and not activity.pending
+        and time.monotonic() - max(unchanged_since, activity.last_change) >= 1.5
+        and (after_request is None or activity.started > after_request)
+    ):
+        raise ProviderError(
+            last_error.code, f"Marriott calendar validation failed: {last_error}"
+        ) from last_error
+    if not loading:
+        if activity.pending:
+            loading = "official page requests still pending"
+        elif after_request is not None and activity.started <= after_request:
+            loading = "guest update request not observed"
+        elif parsed and expected_month and parsed.first_day != expected_month:
+            loading = "requested month not displayed"
+        else:
+            loading = "calendar did not become stable"
     raise ProviderError(
-        ErrorCode.TIMEOUT, "Marriott dated cash calendar did not finish updating"
+        ErrorCode.TIMEOUT, f"Marriott dated cash calendar did not finish updating: {loading}"
     ) from last_error
+
+
+def calendar_loading_reason(snapshot: dict) -> str | None:
+    """Recognize observed placeholders, never infer sold-out from an empty grid.
+
+    Return only fixed diagnostic labels; do not persist page text, URL query
+    strings or account/session data in the task error.
+    """
+    if snapshot.get("busy"):
+        return "page reports loading"
+    hotels = snapshot.get("hotels", [])
+    if not hotels or any(
+        not hotel.get("name", "").strip() or hotel.get("href", "") in ("", "/hotels/travel/")
+        for hotel in hotels
+    ):
+        return "rendered hotel identity not loaded"
+    if not any("晚客房总费用" in button.get("text", "") for button in snapshot.get("buttons", [])):
+        return "cash total currency not loaded"
+    cells = [cell for cell in snapshot.get("cells", []) if not cell.get("outside")]
+    enabled = [cell for cell in cells if cell.get("disabled") is not True]
+    if not enabled:
+        return "no confirmed priced dates (not a sold-out result)"
+    if any(not str(cell.get("price_text", "")).strip() for cell in enabled):
+        return "date prices not loaded"
+    return None
 
 
 async def set_adults(page, activity, adults: int):
@@ -273,14 +323,18 @@ async def collect_calendar_hints(provider, request: CalendarHintRequest) -> Cale
     page = await provider._get_page()
     activity = PageActivity()
     activity.attach(page)
+    stage = "hotel identity readiness"
     try:
         opened = await provider._open_hotel(code)
         if opened is not page:
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Marriott changed the observed calendar page")
         entry_url = page.url
         verify_calendar_url(entry_url, code)
+        stage = "calendar grid readiness"
         await page.get_by_role("gridcell").first.wait_for(state="visible", timeout=30000)
+        stage = "guest controls"
         after_request = await set_adults(page, activity, request.adults)
+        stage = "dated cash calendar"
         month, snapshot = await settled_calendar(
             provider, page, activity, request, after_request=after_request
         )
@@ -342,7 +396,7 @@ async def collect_calendar_hints(provider, request: CalendarHintRequest) -> Cale
         await provider._check_access(page, activity.rejected_status)
         raise ProviderError(
             ErrorCode.TIMEOUT if isinstance(exc, PlaywrightTimeout) else ErrorCode.NETWORK_ERROR,
-            "Marriott public calendar could not be read",
+            f"Marriott public calendar could not be read at {stage}",
         ) from exc
     finally:
         activity.detach(page)

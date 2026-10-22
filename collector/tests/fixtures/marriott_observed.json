@@ -1,0 +1,41 @@
+{
+  "observed_at": "2026-09-28",
+  "source": "Copied price response from backend/tests/fixtures/marriott_observed.json; NYCMQ 2026-10-07/08, 1 room, 2 adults. Original request and precise capture time are absent.",
+  "rates": {
+    "data": {
+      "commerce": {
+        "product": {
+          "searchProductsByProperty": {
+            "__typename": "ProductSearchByPropertyConnection",
+            "total": 1,
+            "edges": [{
+              "node": {
+                "__typename": "HotelRoom",
+                "id": "TllDTVF8QVAwS3xEQkRCfDIwMjYtMTAtMDd8MjAyNi0xMC0wOHxjOTZjMTZlYy1jZGM1LTRkMGYtYjhjNi0xYWFlMDU5ODllMjQ",
+                "basicInformation": {
+                  "name": "Deluxe", "description": "Guest room, 2 Double", "type": "dbdb",
+                  "isMembersOnly": true, "ratePlan": [{"ratePlanCode": "AP0K"}]
+                },
+                "rates": {
+                  "name": "Member Rate Prepay Non-refundable Non-changeable",
+                  "rateModes": {
+                    "__typename": "HotelRoomRateModesCash",
+                    "averageNightlyRatePerUnit": {"amount": {"amount": 115200, "currency": "USD", "decimalPoint": 2}}
+                  }
+                },
+                "totalPricing": {
+                  "quantity": 1,
+                  "rateModes": {
+                    "grandTotal": {"amount": {"amount": 137706, "currency": "USD", "decimalPoint": 2}},
+                    "subtotalPerQuantity": {"amount": {"amount": 115200, "currency": "USD", "decimalPoint": 2}},
+                    "totalMandatoryFeesPerQuantity": {"amount": {"amount": 4500, "currency": "USD", "decimalPoint": 2}}
+                  }
+                }
+              }
+            }]
+          }
+        }
+      }
+    }
+  }
+}

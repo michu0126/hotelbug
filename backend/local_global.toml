@@ -1,0 +1,23 @@
+# 全球六集团；自动发现目录，不要求逐家手工填写。
+# 路径相对于本文件。旧数据库只读导入酒店资料，不导入价格、Cookie或通知凭据。
+database = "../data/global-monitor.sqlite"
+queue = "../data/global-queue.sqlite"
+brands = ["marriott", "ihg", "hilton", "hyatt", "gha", "accor"]
+chrome_port = 9222
+dashboard_port = 8098
+profile = "../collector/.profiles/marriott-passive"
+min_delay_seconds = 15
+max_delay_seconds = 30
+catalog_interval_seconds = 30
+max_pending_jobs = 120
+alert_drop_fraction = 0.35
+alert_min_history_days = 5
+alert_confirmation_seconds = 180
+seed_sources = [
+  "../work/marriott-cn-global-verified-20261009.sqlite",
+  "../work/ihg-directory-audit-20261005/catalog-audit.sqlite",
+  "../work/hilton-directory-audit-20261005/catalog-audit.sqlite",
+  "../work/hyatt-directory-audit-20261005/catalog-audit.sqlite",
+  "../work/gha-directory-audit-20261005/catalog-audit.sqlite",
+  "../work/accor-directory-audit-20261005/catalog-audit.sqlite",
+]

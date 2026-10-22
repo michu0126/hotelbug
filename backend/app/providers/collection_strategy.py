@@ -6,7 +6,7 @@ def collection_strategy(provider):
         return {
             "mode": "official_api_or_cookie",
             "label": "官网接口 / Cookie",
-            "detail": "英文官网单晚房型走已观察接口；中文官网、目录和月历使用 Cookie 浏览器。",
+            "detail": "中文站自动选择酒店、日期并监听页面真实房价响应；英文单晚房型保留已观察接口，目录与月历使用官网会话。",
             "api_scope": "www.marriott.com · single room/night cash offers",
             "live_api_verified": False,
         }

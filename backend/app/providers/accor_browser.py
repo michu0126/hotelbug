@@ -19,6 +19,15 @@ from app.providers.browser_session import new_provider_page
 from app.schemas.domain import HealthResult, HotelData, RateData, RateRequest
 
 ROOT = "https://all.accor.com"
+CURRENCY_BUTTON = re.compile(r"^([A-Z]{3})\s*\([^)]*\)$")
+# The booking offers can render before the site's currency header. Observed
+# during the global Worker query of 0341 on 2026-10-22; reading early is a race.
+CURRENCY_READY = r"""pattern => {
+    const values = [...document.querySelectorAll('button')]
+      .map(node => node.textContent.replace(/\s+/g, ' ').trim().match(new RegExp(pattern)))
+      .filter(Boolean).map(match => match[1]);
+    return new Set(values).size === 1;
+}"""
 MONTHS = (
     "January",
     "February",
@@ -158,7 +167,7 @@ def parse_public_rates(html: str, request: RateRequest, page_url: str) -> list[R
             raise ProviderError(ErrorCode.INVALID_RESPONSE, "Accor displayed dates do not match request")
     currencies = []
     for button in soup.select("button"):
-        match = re.fullmatch(r"([A-Z]{3})\s*\([^)]*\)", button.get_text(" ", strip=True))
+        match = CURRENCY_BUTTON.fullmatch(button.get_text(" ", strip=True))
         if match:
             currencies.append(match.group(1))
     if len(set(currencies)) != 1:
@@ -427,6 +436,8 @@ class AccorBrowserProvider(HotelProvider):
             await page.locator(
                 "label.hotel-accommodation-offers-content__label .offer-price--alternative"
             ).first.wait_for(state="visible", timeout=45000)
+            stage = "selected currency"
+            await page.wait_for_function(CURRENCY_READY, arg=CURRENCY_BUTTON.pattern, timeout=15000)
             stage = "all room offers"
             return await self._collect_public_rates(page, request)
         except AssertionError as exc:
