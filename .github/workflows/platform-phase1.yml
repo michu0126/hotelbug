@@ -53,7 +53,7 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-          pytest -q
+          xvfb-run -a pytest -q
       - name: PostgreSQL migration round trip
         working-directory: backend
         env:
