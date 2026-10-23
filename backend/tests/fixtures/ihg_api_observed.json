@@ -1,0 +1,829 @@
+{
+  "provenance": {
+    "source_kind": "AUXILIARY_NORMAL_PAGE_RESPONSE_JSON_NOT_ORIGINAL_HAR",
+    "source_file": "ihg-json-547f8ebf61de15b8.json",
+    "source_file_sha256": "afd4285c19fce8f8b51855c8f0fa7eee9de0ae19777a9b0c89e10fa5f43621ac",
+    "raw_response_sha256": "547f8ebf61de15b868edd5134d9985a55a1744df39afb5143bd21fc859b732d8",
+    "original_offers": 205,
+    "projected_offers": 2,
+    "omitted": [
+      "unselected_offers_and_definitions",
+      "headers",
+      "cookies",
+      "query_values",
+      "exact_response_timestamp"
+    ],
+    "timestamp_basis": "browser_run_start_only",
+    "note": "Other retained JSON fields copied without semantic invention; static/projection inspection is not another live request."
+  },
+  "request": {
+    "startDate": "2026-11-10",
+    "endDate": "2026-11-11",
+    "hotelMnemonics": [
+      "LONLS"
+    ],
+    "rates": {
+      "ratePlanCodes": [
+        {
+          "internal": "IVAN1"
+        },
+        {
+          "internal": "IVAN3"
+        },
+        {
+          "internal": "IVAN5"
+        },
+        {
+          "internal": "IVAN6"
+        },
+        {
+          "internal": "IVAN7"
+        },
+        {
+          "internal": "IVANI"
+        }
+      ]
+    },
+    "products": [
+      {
+        "productCode": "SR",
+        "startDate": "2026-11-10",
+        "endDate": "2026-11-11",
+        "quantity": 1,
+        "guestCounts": [
+          {
+            "otaCode": "AQC10",
+            "count": 2
+          }
+        ]
+      }
+    ],
+    "options": {
+      "disabilityMode": "ACCESSIBLE_AND_NON_ACCESSIBLE",
+      "returnAdditionalRatePlanDescriptions": true,
+      "rateDetails": {
+        "includePackageDetails": true,
+        "returnDetailedTaxDescriptions": true
+      }
+    }
+  },
+  "response": {
+    "startDate": "2026-11-10",
+    "endDate": "2026-11-11",
+    "hotels": [
+      {
+        "hotelMnemonic": "LONLS",
+        "productDefinitions": [
+          {
+            "productCode": "SR",
+            "inventoryTypeCode": "CSPN",
+            "otaCode": "GRI42",
+            "pacCode": "3N40",
+            "productName": "Sleeping Room",
+            "inventoryTypeName": "Premium Room",
+            "description": "When you arrive at the hotel we will do our best to meet your room type preference. This is subject to availability and cannot be guaranteed",
+            "providerDescription": "When you arrive at the hotel we will do our best to meet your room type preference. This is subject to availability and cannot be guaranteed",
+            "maximumNumberParticipant": 2,
+            "isFlowThrough": true,
+            "isDisplayable": true,
+            "isPremium": true,
+            "isAvailable": true,
+            "maxAdultOcc": 2,
+            "maxChildOcc": 1
+          }
+        ],
+        "bonusRatePlans": [
+          {
+            "code": "IKPCM"
+          },
+          {
+            "code": "IKBB1"
+          }
+        ],
+        "rateDetails": {
+          "offers": [
+            {
+              "ratePlanCode": "IKME6",
+              "productUses": [
+                {
+                  "period": {
+                    "start": "2026-11-10",
+                    "end": "2026-11-11"
+                  },
+                  "inventoryTypeCode": "CSPN",
+                  "quantity": 1,
+                  "guestCounts": [
+                    {
+                      "guestType": "ADULT",
+                      "otaCode": "AQC10",
+                      "count": 2
+                    }
+                  ],
+                  "numberOfAvailableProducts": 9,
+                  "isMainProduct": true,
+                  "rates": {
+                    "defaultPricingBased": true,
+                    "ratesDefinition": {
+                      "rateChanges": [
+                        {
+                          "id": 0,
+                          "start": "2026-11-10",
+                          "end": "2026-11-11",
+                          "amount": "410.31"
+                        }
+                      ],
+                      "average": "410.31",
+                      "checkin": "410.31"
+                    },
+                    "isDefaultPricingBased": true,
+                    "pricingFrequency": "PER_NIGHT",
+                    "pricingMethod": "PER_PRODUCT",
+                    "hasRateChange": false,
+                    "taxInclusionMode": "FOLLOW_HOUSE",
+                    "totalRate": {
+                      "amountBeforeTax": "341.92",
+                      "baseAmount": "410.31",
+                      "amountAfterTax": "410.31",
+                      "feeTaxTotal": "68.39",
+                      "average": {
+                        "baseAmount": "410.31",
+                        "amountAfterTax": "410.31"
+                      },
+                      "checkin": {
+                        "baseAmount": "410.31"
+                      },
+                      "feeTaxSubTotals": [
+                        {
+                          "amount": "68.39",
+                          "otaCodeType": "TAX",
+                          "isIncludedInRate": true,
+                          "feeTaxGroups": [
+                            {
+                              "amount": "68.39",
+                              "feeTaxDefIds": [
+                                0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "totalBaseOccRate": {
+                      "amountBeforeTax": "341.92",
+                      "baseAmount": "410.31",
+                      "amountAfterTax": "410.31",
+                      "feeTaxTotal": "68.39",
+                      "average": {
+                        "baseAmount": "410.31",
+                        "amountAfterTax": "410.31"
+                      },
+                      "checkin": {
+                        "baseAmount": "410.31"
+                      },
+                      "feeTaxSubTotals": [
+                        {
+                          "amount": "68.39",
+                          "otaCodeType": "TAX",
+                          "isIncludedInRate": true,
+                          "feeTaxGroups": [
+                            {
+                              "amount": "68.39",
+                              "feeTaxDefIds": [
+                                0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dailyRates": [
+                      {
+                        "start": "2026-11-10",
+                        "end": "2026-11-11",
+                        "dailyTotalRate": {
+                          "amountBeforeTax": "341.92",
+                          "baseAmount": "410.31",
+                          "amountAfterTax": "410.31",
+                          "rateDefId": 0,
+                          "feeTaxTotal": "68.39",
+                          "feeTaxSubTotals": [
+                            {
+                              "amount": "68.39",
+                              "otaCodeType": "TAX",
+                              "isIncludedInRate": true,
+                              "feeTaxGroups": [
+                                {
+                                  "amount": "68.39",
+                                  "feeTaxDefIds": [
+                                    0
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "policies": {
+                "guarantee": {
+                  "isRequired": true,
+                  "time": "16:00:00",
+                  "type": "STANDARD_GUARANTEE",
+                  "acceptedGuarantees": {
+                    "creditCards": "REDACTED"
+                  }
+                },
+                "cancellationNoShow": {
+                  "amountCurrency": "GBP",
+                  "feeCurrency": "GBP",
+                  "feeType": "NIGHTS",
+                  "feeValue": "1",
+                  "amount": "410.31",
+                  "description": "Canceling your reservation before 4:00 PM (local hotel time) on Monday, 9 November, 2026 will result in no charge. Canceling your reservation after 4:00 PM (local hotel time) on 9 November, 2026, or failing to show, will result in a charge of 1 night per room to your credit card or other guaranteed payment method. Taxes may apply. Failing to call or show before check-out time after the first night of a reservation will result in cancellation of the remainder of your reservation.\r\n",
+                  "deadline": {
+                    "deadlineValue": 1,
+                    "dateTime": "2026-11-09T16:00:00",
+                    "deadlineType": "NUMBER_OF_DAYS_BEFORE_CHECKIN"
+                  },
+                  "isGracePeriod": true
+                },
+                "hold": {
+                  "is24HourHold": true
+                },
+                "isRefundable": true,
+                "checkinTime": "15:00:00",
+                "checkoutTime": "11:00:00"
+              },
+              "totalRate": {
+                "amountBeforeTax": "341.92",
+                "baseAmount": "410.31",
+                "amountAfterTax": "410.31",
+                "feeTaxTotal": "68.39",
+                "average": {
+                  "baseAmount": "410.31",
+                  "amountAfterTax": "410.31"
+                },
+                "checkin": {
+                  "baseAmount": "410.31"
+                },
+                "feeTaxSubTotals": [
+                  {
+                    "amount": "68.39",
+                    "otaCodeType": "TAX",
+                    "isIncludedInRate": true,
+                    "feeTaxGroups": [
+                      {
+                        "amount": "68.39",
+                        "feeTaxDefIds": [
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "totalBaseOccRate": {
+                "amountBeforeTax": "341.92",
+                "baseAmount": "410.31",
+                "amountAfterTax": "410.31",
+                "feeTaxTotal": "68.39",
+                "average": {
+                  "baseAmount": "410.31",
+                  "amountAfterTax": "410.31"
+                },
+                "checkin": {
+                  "baseAmount": "410.31"
+                },
+                "feeTaxSubTotals": [
+                  {
+                    "amount": "68.39",
+                    "otaCodeType": "TAX",
+                    "isIncludedInRate": true,
+                    "feeTaxGroups": [
+                      {
+                        "amount": "68.39",
+                        "feeTaxDefIds": [
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "availableStatus": "AVAILABLE",
+              "alternatePayments": {
+                "isAlipayAvailable": false,
+                "isAlipayPostPostAvailable": false,
+                "isPaypalAvailable": false,
+                "isSofortAvailable": false,
+                "isWechatAvailable": false,
+                "isMainlandChinaUnionPayAvailable": false,
+                "isGlobalChinaUnionPayAvailable": true,
+                "isPaypalDirectAvailable": false,
+                "isApplePayAvailable": false,
+                "isUpliftAvailable": false
+              }
+            },
+            {
+              "ratePlanCode": "IGCOR",
+              "productUses": [
+                {
+                  "period": {
+                    "start": "2026-11-10",
+                    "end": "2026-11-11"
+                  },
+                  "inventoryTypeCode": "CSPN",
+                  "quantity": 1,
+                  "guestCounts": [
+                    {
+                      "guestType": "ADULT",
+                      "otaCode": "AQC10",
+                      "count": 2
+                    }
+                  ],
+                  "numberOfAvailableProducts": 9,
+                  "isMainProduct": true,
+                  "rates": {
+                    "defaultPricingBased": true,
+                    "ratesDefinition": {
+                      "rateChanges": [
+                        {
+                          "id": 0,
+                          "start": "2026-11-10",
+                          "end": "2026-11-11",
+                          "amount": "413.00"
+                        }
+                      ],
+                      "average": "413.00",
+                      "checkin": "413.00"
+                    },
+                    "isDefaultPricingBased": true,
+                    "pricingFrequency": "PER_NIGHT",
+                    "pricingMethod": "PER_PRODUCT",
+                    "hasRateChange": false,
+                    "taxInclusionMode": "FOLLOW_HOUSE",
+                    "totalRate": {
+                      "amountBeforeTax": "344.17",
+                      "baseAmount": "413.00",
+                      "amountAfterTax": "413.00",
+                      "feeTaxTotal": "68.83",
+                      "average": {
+                        "baseAmount": "413.00",
+                        "amountAfterTax": "413.00"
+                      },
+                      "checkin": {
+                        "baseAmount": "413.00"
+                      },
+                      "feeTaxSubTotals": [
+                        {
+                          "amount": "68.83",
+                          "otaCodeType": "TAX",
+                          "isIncludedInRate": true,
+                          "feeTaxGroups": [
+                            {
+                              "amount": "68.83",
+                              "feeTaxDefIds": [
+                                0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "totalBaseOccRate": {
+                      "amountBeforeTax": "344.17",
+                      "baseAmount": "413.00",
+                      "amountAfterTax": "413.00",
+                      "feeTaxTotal": "68.83",
+                      "average": {
+                        "baseAmount": "413.00",
+                        "amountAfterTax": "413.00"
+                      },
+                      "checkin": {
+                        "baseAmount": "413.00"
+                      },
+                      "feeTaxSubTotals": [
+                        {
+                          "amount": "68.83",
+                          "otaCodeType": "TAX",
+                          "isIncludedInRate": true,
+                          "feeTaxGroups": [
+                            {
+                              "amount": "68.83",
+                              "feeTaxDefIds": [
+                                0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dailyRates": [
+                      {
+                        "start": "2026-11-10",
+                        "end": "2026-11-11",
+                        "dailyTotalRate": {
+                          "amountBeforeTax": "344.17",
+                          "baseAmount": "413.00",
+                          "amountAfterTax": "413.00",
+                          "rateDefId": 0,
+                          "feeTaxTotal": "68.83",
+                          "feeTaxSubTotals": [
+                            {
+                              "amount": "68.83",
+                              "otaCodeType": "TAX",
+                              "isIncludedInRate": true,
+                              "feeTaxGroups": [
+                                {
+                                  "amount": "68.83",
+                                  "feeTaxDefIds": [
+                                    0
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "policies": {
+                "guarantee": {
+                  "isRequired": true,
+                  "time": "16:00:00",
+                  "type": "STANDARD_GUARANTEE",
+                  "acceptedGuarantees": {
+                    "creditCards": "REDACTED"
+                  }
+                },
+                "cancellationNoShow": {
+                  "amountCurrency": "GBP",
+                  "feeCurrency": "GBP",
+                  "feeType": "NIGHTS",
+                  "feeValue": "1",
+                  "amount": "413.00",
+                  "description": "Canceling your reservation before 4:00 PM (local hotel time) on Monday, 9 November, 2026 will result in no charge. Canceling your reservation after 4:00 PM (local hotel time) on 9 November, 2026, or failing to show, will result in a charge of 1 night per room to your credit card or other guaranteed payment method. Taxes may apply. Failing to call or show before check-out time after the first night of a reservation will result in cancellation of the remainder of your reservation.\r\n",
+                  "deadline": {
+                    "deadlineValue": 1,
+                    "dateTime": "2026-11-09T16:00:00",
+                    "deadlineType": "NUMBER_OF_DAYS_BEFORE_CHECKIN"
+                  },
+                  "isGracePeriod": true
+                },
+                "hold": {
+                  "is24HourHold": true
+                },
+                "isRefundable": true,
+                "checkinTime": "15:00:00",
+                "checkoutTime": "11:00:00"
+              },
+              "totalRate": {
+                "amountBeforeTax": "344.17",
+                "baseAmount": "413.00",
+                "amountAfterTax": "413.00",
+                "feeTaxTotal": "68.83",
+                "average": {
+                  "baseAmount": "413.00",
+                  "amountAfterTax": "413.00"
+                },
+                "checkin": {
+                  "baseAmount": "413.00"
+                },
+                "feeTaxSubTotals": [
+                  {
+                    "amount": "68.83",
+                    "otaCodeType": "TAX",
+                    "isIncludedInRate": true,
+                    "feeTaxGroups": [
+                      {
+                        "amount": "68.83",
+                        "feeTaxDefIds": [
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "totalBaseOccRate": {
+                "amountBeforeTax": "344.17",
+                "baseAmount": "413.00",
+                "amountAfterTax": "413.00",
+                "feeTaxTotal": "68.83",
+                "average": {
+                  "baseAmount": "413.00",
+                  "amountAfterTax": "413.00"
+                },
+                "checkin": {
+                  "baseAmount": "413.00"
+                },
+                "feeTaxSubTotals": [
+                  {
+                    "amount": "68.83",
+                    "otaCodeType": "TAX",
+                    "isIncludedInRate": true,
+                    "feeTaxGroups": [
+                      {
+                        "amount": "68.83",
+                        "feeTaxDefIds": [
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "availableStatus": "AVAILABLE",
+              "alternatePayments": {
+                "isAlipayAvailable": false,
+                "isAlipayPostPostAvailable": false,
+                "isPaypalAvailable": false,
+                "isSofortAvailable": false,
+                "isWechatAvailable": false,
+                "isMainlandChinaUnionPayAvailable": false,
+                "isGlobalChinaUnionPayAvailable": true,
+                "isPaypalDirectAvailable": false,
+                "isApplePayAvailable": false,
+                "isUpliftAvailable": false
+              },
+              "upsells": [
+                {
+                  "ratePlanCode": "IGBBB",
+                  "header": "Add Breakfast",
+                  "description": "Per Day (Up to 2 adults sharing a room)",
+                  "category": "STANDARD",
+                  "priority": 1,
+                  "priceDifference": 30,
+                  "priceDifferenceAfterFeeTax": 30
+                },
+                {
+                  "ratePlanCode": "IKPCM",
+                  "header": "1,000 Points",
+                  "description": "Per night",
+                  "category": "STANDARD",
+                  "priority": 2,
+                  "priceDifference": 5,
+                  "priceDifferenceAfterFeeTax": 5
+                }
+              ]
+            }
+          ],
+          "feeTaxDefinitions": [
+            {
+              "id": 0,
+              "description": "VAT",
+              "chargeFrequency": "PER_NIGHT",
+              "chargeUnit": "PER_PRODUCT",
+              "isIncluded": true,
+              "computationType": "PERCENT",
+              "start": "2026-11-10",
+              "end": "2026-11-11",
+              "dow": "MTWTFSS",
+              "formattedDescription": " 20% per night included in rate effective 10 November, 2026 through 11 November, 2026",
+              "otaCode": "FTT17",
+              "name": "upcoming",
+              "computationMode": "RATE",
+              "values": [
+                {
+                  "value": "20"
+                }
+              ],
+              "isPaidAtHotel": false,
+              "otaCodeType": "TAX"
+            }
+          ]
+        },
+        "propertyCurrency": "GBP",
+        "ratePlanDefinitions": [
+          {
+            "code": "IKME6",
+            "name": "IHG1R 2000 PTS NT",
+            "providerDescription": "Offer includes room and 2000 IHG One Rewards points per night. Bonus will be fulfilled electronically.",
+            "additionalDescriptions": {
+              "longRateName": "MEMBER RATE by IHG® One Rewards BONUS POINTS: 2,000 Bonus Points for Every Night",
+              "longRateDesc": "Exclusive to IHG® One Rewards members. Earn Faster with this package offer - Earn 2,000 bonus IHG One Rewards points for each night when you book the 2,000 Bonus Point Package. Membership in IHG One Rewards is free! Points can be redeemed at any time for a variety of rewards, including free hotel stays starting at just 10,000 points, airline miles, name-brand merchandise and more. Book now to take advantage of this special offer!",
+              "shortRateName": "IHGR 2000 PTS NT"
+            },
+            "advanceBooking": {
+              "isAdvancePurchase": false
+            },
+            "isGroupRatePlan": false,
+            "isTentative": true,
+            "isLoyaltyIdRequired": true,
+            "isPackage": true,
+            "isVoucherRequired": false,
+            "isRewardEarned": true,
+            "isIdRequired": false,
+            "isCommissionable": true,
+            "areAmountsConfidential": false,
+            "packageDetails": {
+              "themesAndElements": [
+                {
+                  "code": 2,
+                  "type": "Element",
+                  "name": "Points",
+                  "description": "IHG Bonus Points"
+                }
+              ],
+              "updatedTime": "23:10:26 06:13:15"
+            },
+            "isPreferred": false
+          },
+          {
+            "code": "IGCOR",
+            "name": "BEST FLEXIBLE RATE",
+            "providerDescription": "BEST AVAILABLE RATE",
+            "additionalDescriptions": {
+              "longRateName": "Best Flexible Rate",
+              "policyRateDesc": "Best and least restrictive public rate. Changes usually acceptable, but check hotel cancellation policy before booking.",
+              "bookingMessage": "Thank you for making your reservation on our web site.",
+              "shortRateDesc": "Best and least restrictive public rate. Changes usually acceptable, but check hotel cancellation policy before booking.",
+              "longRateDesc": "Take advantage of our best and least restrictive publicly available rate. Changes to your reservation are usually acceptable, but always check the hotel's cancellation policy before booking for cancellation fees that may apply depending upon arrival date and hotel selected.  ",
+              "shortRateName": "Best Flexible"
+            },
+            "advanceBooking": {
+              "isAdvancePurchase": false
+            },
+            "isGroupRatePlan": false,
+            "isTentative": true,
+            "isLoyaltyIdRequired": false,
+            "isVoucherRequired": false,
+            "isRewardEarned": true,
+            "isIdRequired": false,
+            "isCommissionable": true,
+            "areAmountsConfidential": false,
+            "isPreferred": false,
+            "childrenRatePlans": [
+              "IDME0"
+            ]
+          }
+        ],
+        "brandCode": "INDG",
+        "pmOptOutWeb": true,
+        "isoCountryCode": "GB",
+        "allowMultiRoomFlow": true,
+        "maxMultiRoomsFlowQuantity": 9
+      }
+    ],
+    "attributeDefinitions": [
+      {
+        "code": "AB020",
+        "classPath": [
+          "AA",
+          "AB"
+        ],
+        "name": "1 Queen Bed",
+        "prioritySequence": "AB020"
+      },
+      {
+        "code": "AB040",
+        "classPath": [
+          "AA",
+          "AB"
+        ],
+        "name": "1 Double Bed",
+        "prioritySequence": "AB040"
+      },
+      {
+        "code": "BA080",
+        "classPath": [
+          "ACC"
+        ],
+        "name": "Roll in Shower",
+        "description": "Roll in Shower",
+        "prioritySequence": "BA080"
+      },
+      {
+        "code": "CC020",
+        "classPath": [
+          "CA"
+        ],
+        "name": "Standard",
+        "prioritySequence": "CC020"
+      },
+      {
+        "code": "CD010",
+        "classPath": [
+          "CA"
+        ],
+        "name": "Premium",
+        "prioritySequence": "CD010"
+      },
+      {
+        "code": "DC010",
+        "classPath": [
+          "DA"
+        ],
+        "name": "Leicester Square View",
+        "description": "Leicester Square View",
+        "prioritySequence": "DC010"
+      },
+      {
+        "code": "GA190",
+        "classPath": [
+          "GA"
+        ],
+        "name": "Walk-in Shower",
+        "prioritySequence": "GA190"
+      },
+      {
+        "code": "JA010",
+        "classPath": [
+          "JA"
+        ],
+        "name": "Balcony",
+        "prioritySequence": "JA010"
+      },
+      {
+        "code": "MA160",
+        "classPath": [
+          "MA"
+        ],
+        "name": "Windowless",
+        "prioritySequence": "MA160"
+      },
+      {
+        "code": "NSMK",
+        "classPath": [
+          "SMP"
+        ],
+        "name": "Non-Smoking",
+        "prioritySequence": "DB010"
+      }
+    ],
+    "attributeClassDefinitions": [
+      {
+        "prioritySequence": "AA",
+        "code": "AA",
+        "name": "Beds",
+        "isFilterable": true
+      },
+      {
+        "prioritySequence": "AB",
+        "code": "AB",
+        "name": "Rooms with 1 Bed",
+        "isFilterable": true
+      },
+      {
+        "prioritySequence": "BA",
+        "code": "ACC",
+        "name": "Accessible",
+        "isFilterable": true
+      },
+      {
+        "prioritySequence": "MA",
+        "code": "MA",
+        "name": "Room Elements",
+        "isFilterable": false
+      },
+      {
+        "prioritySequence": "DB",
+        "code": "SMP",
+        "name": "Smoking Policy",
+        "isFilterable": false
+      },
+      {
+        "prioritySequence": "JA",
+        "code": "JA",
+        "name": "Outdoor Items",
+        "isFilterable": false
+      },
+      {
+        "prioritySequence": "GA",
+        "code": "GA",
+        "name": "Bathroom Amenities",
+        "isFilterable": false
+      },
+      {
+        "prioritySequence": "DA",
+        "code": "DA",
+        "name": "View",
+        "isFilterable": true
+      },
+      {
+        "prioritySequence": "CA",
+        "code": "CA",
+        "name": "Room Classification",
+        "isFilterable": false
+      }
+    ],
+    "warnings": [
+      {
+        "id": 0,
+        "message": "Failed to retrieve rate description for rates : [ID2G1, ID3G1, IDCVG]",
+        "code": "AVL_100010"
+      },
+      {
+        "id": 1,
+        "message": "Failed to communicate with HCS while retrieving data for cache [NRI_PRODUCTS]",
+        "code": "AVL_100027"
+      }
+    ],
+    "isSellStrategyIncludedIfNoAvail": false
+  }
+}

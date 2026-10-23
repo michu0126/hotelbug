@@ -1,0 +1,51 @@
+{
+  "rooms": [
+    {
+      "roomName": "Deluxe Skyline King",
+      "roomCode": "1H6XK",
+      "rates": [
+        {
+          "price": 5022.0,
+          "dailyPrice": 5910.89,
+          "currency": "THB",
+          "rateCode": "M20APDRE",
+          "rateName": "DISCOVERY - Avani Advance Purchase",
+          "baseRateCode": "S16S01BE",
+          "baseRateName": "RELAX, RECHARGE, REPEAT",
+          "memberRate": true,
+          "baseRatePrice": 7100.0,
+          "dailyBaseRatePrice": 7100.0,
+          "taxInclusive": false,
+          "discoveryDollars": 5,
+          "amountWithFees": "5022.0",
+          "amountWithTaxesFees": "5910.89",
+          "amount": "5022.0",
+          "amountPayableNow": "5910.89",
+          "amountWithInclusiveTaxes": "5022.0",
+          "availableInventory": "14"
+        },
+        {
+          "price": 5580.0,
+          "dailyPrice": 6567.66,
+          "currency": "THB",
+          "rateCode": "S20APDRE",
+          "rateName": "Avani Advance Purchase",
+          "baseRateCode": null,
+          "baseRateName": null,
+          "memberRate": false,
+          "baseRatePrice": null,
+          "dailyBaseRatePrice": null,
+          "taxInclusive": false,
+          "discoveryDollars": 6,
+          "amountWithFees": "5580.0",
+          "amountWithTaxesFees": "6567.66",
+          "amount": "5580.0",
+          "amountPayableNow": "6567.66",
+          "amountWithInclusiveTaxes": "5580.0",
+          "availableInventory": "14"
+        }
+      ]
+    }
+  ],
+  "promoValid": false
+}
